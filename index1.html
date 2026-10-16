@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Note Taking Assistant | Study Smart</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="header"><div class="container nav">
+    <a class="brand" href="{{ url_for('home') }}">Note Taking Assistant</a>
+    <nav>
+      <a href="{{ url_for('home') }}">Home</a>
+      {% if username %}
+        <a href="{{ url_for('dashboard') }}">Dashboard</a>
+        <form method="post" action="{{ url_for('logout') }}"><button class="text-button" type="submit">Log out</button></form>
+      {% else %}
+        <a href="{{ url_for('login') }}">Log in</a>
+        <a class="nav-cta" href="{{ url_for('login') }}">Join for free</a>
+      {% endif %}
+    </nav>
+  </div></header>
+  <main class="container">
+    {% if page == 'home' %}
+      <section class="hero">
+        <div class="eyebrow">NOTE TAKING ASSISTANT</div>
+        <h1>Study Smart.</h1>
+        <p>Record lectures, analyze your notes, catch up on missed information live and prepare for exams.</p>
+        <a class="button" href="{{ url_for('dashboard') if username else url_for('login') }}">{{ 'Go to dashboard' if username else 'Join for free' }} →</a>
+      </section>
+      <section class="tools"><h2>Study Tools</h2>
+        {% for key, title in tools %}
+          <a class="tool" href="{{ url_for('tool_page', tool=key) }}"><strong>{{ title }}</strong><span aria-hidden="true">›</span></a>
+        {% endfor %}
+      </section>
+    {% elif page == 'login' %}
+      <section class="login-card"><h2>Join for free</h2><p>Continue to your study workspace.</p>
+        <form method="post">
+          <label for="username">Your name</label><input id="username" name="username" required placeholder="Enter your name">
+          <label for="password">Password</label><input id="password" name="password" type="password" required placeholder="Password">
+          <button class="button full" type="submit">Continue</button>
+        </form>
+      </section>
+    {% elif page == 'dashboard' %}
+      <section class="dashboard-head"><div class="eyebrow muted">DASHBOARD</div><h1 class="dashboard-title">Welcome, {{ username }}</h1><p>Continue where you left off</p></section>
+      <section class="workspace"><div class="section-title"><h2>Your workspace</h2></div>
+        <div class="panel">
+          {% if subjects %}
+            {% for subject in subjects %}<div class="subject"><strong>{{ subject }}</strong><span>Subject</span></div>{% endfor %}
+          {% else %}
+            <h3>No subjects yet</h3>
+          {% endif %}
+          <form class="subject-form" method="post" action="{{ url_for('add_subject') }}">
+            <input name="subject" maxlength="70" required placeholder="New subject name" aria-label="New subject name">
+            <button class="button" type="submit">+ Add subject</button>
+          </form>
+        </div>
+      </section>
+      <section class="tools"><h2>Study Tools</h2>
+        {% for key, title in tools %}
+          <a class="tool" href="{{ url_for('tool_page', tool=key) }}"><strong>{{ title }}</strong><span aria-hidden="true">›</span></a>
+        {% endfor %}
+      </section>
+    {% elif page == 'tool' %}
+      <section class="tool-page"><a class="back" href="{{ url_for('dashboard') }}">← Dashboard</a><h1>{{ tool_title }}</h1><div class="panel"><h3>{{ tool_title }}</h3></div></section>
+    {% endif %}
+  </main>
+</body>
+</html>
