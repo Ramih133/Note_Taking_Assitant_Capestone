@@ -9,3 +9,8 @@ transcript.json
 slides.json
 test_deck.pdf
 .ipynb_checkpoints/
+
+__pycache__/
+note_app/sessions/
+venv/
+*.pyc

@@ -1,0 +1,2 @@
+# Note_Taking_Assitant_Capestone
+Note Taking Assistant helps students keep up during lectures, fill in missing information in notes, and prepare for quizzes, exams, and assignments. The system takes three inputs: the lecture audio, the slides, and the student's notes.The application can also help students keep their notes complete during a live lecture and use a catchup feature if they fall behind.

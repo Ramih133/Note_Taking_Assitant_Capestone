@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Note AI</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid #ccc; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr 1fr; min-height: 0; }
+  section { display: flex; flex-direction: column; border-right: 1px solid #ccc; min-height: 0; }
+  section h2 { margin: 0; padding: 8px 12px; font-size: 14px; border-bottom: 1px solid #eee; display: flex; gap: 8px; align-items: center; }
+  .scroll { flex: 1; overflow-y: auto; padding: 12px; }
+  #notes { flex: 1; border: 0; padding: 12px; font: inherit; resize: none; outline: none; }
+  .line, .gap { margin-bottom: 10px; line-height: 1.4; }
+  .stamp { color: #888; font-size: 12px; margin-right: 6px; }
+  .gap { border-left: 3px solid #d33; padding-left: 8px; }
+  .gap.recent { border-left-color: #bbb; color: #888; }
+  .group-label { color: #888; font-size: 12px; margin: 10px 0 6px; text-transform: uppercase; }
+  .segment { border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin-bottom: 12px; }
+  .seg-head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; font-size: 14px; }
+  .bar { height: 6px; background: #eee; border-radius: 3px; margin: 8px 0 4px; overflow: hidden; }
+  .bar > div { height: 100%; background: #3a3; }
+  .bar.low > div { background: #d33; }
+  .bar.mid > div { background: #e90; }
+  .seg-notes { font-size: 12px; color: #666; margin: 4px 0 0 0; padding-left: 16px; }
+  details summary { cursor: pointer; font-size: 12px; color: #666; margin-top: 6px; }
+  .score { color: #888; font-size: 12px; }
+  #status { color: #888; font-size: 13px; }
+  .spacer { flex: 1; }
+  input[type=number] { width: 60px; }
+</style>
+</head>
+<body>
+<header>
+  <button id="toggle">Start recording</button>
+  <span id="status">Idle</span>
+  <span class="spacer"></span>
+  <label><input type="checkbox" id="auto" checked> Live gap updates</label>
+</header>
+
+<main>
+  <section>
+    <h2>Transcript</h2>
+    <div class="scroll" id="transcript"></div>
+  </section>
+
+  <section>
+    <h2>Your notes <span id="saved" class="score"></span></h2>
+    <textarea id="notes" placeholder="Type notes here, one idea per line..."></textarea>
+  </section>
+
+  <section>
+    <h2>
+      Lecture segments
+      <span class="spacer"></span>
+      <label class="score">threshold <input type="number" id="threshold" value="0.45" step="0.01" min="0" max="1"></label>
+      <button id="check">Check</button>
+    </h2>
+    <div class="scroll" id="gaps"><p class="score">Nothing checked yet.</p></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let lineCount = 0;
+let recording = false;
+let lastSegments = [];
+const openNotes = new Set();
+let saveTimer = null;
+let checking = false;
+let checkQueued = false;
+let latestStamp = 0;
+const GRACE_SECONDS = 45;  // give the student time to write it before calling it missing
+
+const toSeconds = s => { const [m, sec] = s.split(":").map(Number); return m * 60 + sec; };
+
+// sends a request to server.py and returns the reply
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return res.json();
+}
+
+// grabs any new transcript lines and adds them to the left panel
+async function poll() {
+  const data = await api(`/status?since=${lineCount}`);
+  if (lineCount === 0 && data.notes && !$("notes").value) $("notes").value = data.notes;
+  for (const l of data.lines) {
+    const div = document.createElement("div");
+    div.className = "line";
+    div.innerHTML = `<span class="stamp">${l.stamp}</span>`;
+    div.append(l.text);
+    $("transcript").append(div);
+    $("transcript").scrollTop = $("transcript").scrollHeight;
+    latestStamp = toSeconds(l.stamp);
+  }
+  if (data.lines.length && $("auto").checked) checkGaps();
+  lineCount = data.total;
+  setRecording(data.recording, data.session);
+}
+
+// updates the button and status text
+function setRecording(on, session) {
+  recording = on;
+  $("toggle").textContent = on ? "Stop recording" : "Start recording";
+  $("status").textContent = on ? `Recording (${session})` : (session ? `Stopped (${session})` : "Idle");
+}
+
+// start / stop button
+$("toggle").onclick = async () => {
+  $("toggle").disabled = true;
+  if (recording) {
+    $("status").textContent = "Finishing last chunk...";
+    await api("/stop", {});
+    await poll();
+    await checkGaps();
+  } else {
+    $("transcript").innerHTML = "";
+    lineCount = 0;
+    latestStamp = 0;
+    lastSegments = [];
+    renderGaps();
+    await api("/start", {});
+  }
+  $("toggle").disabled = false;
+  poll();
+};
+
+// saves the notes 1.5s after the student stops typing
+$("notes").addEventListener("input", () => {
+  $("saved").textContent = "editing...";
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    await api("/notes", { text: $("notes").value });
+    $("saved").textContent = "saved";
+    if ($("auto").checked && lineCount) checkGaps();
+  }, 1500);
+});
+
+// asks the server which parts of the lecture are missing from the notes
+async function checkGaps() {
+  if (checking) { checkQueued = true; return; }
+  checking = true;
+  $("check").disabled = true;
+  try {
+    const data = await api("/gaps", { text: $("notes").value });
+    lastSegments = data.segments;
+    renderGaps();
+  } finally {
+    checking = false;
+    $("check").disabled = false;
+    if (checkQueued) { checkQueued = false; checkGaps(); }
+  }
+}
+
+// keep in sync with is_flagged() in gaps.py
+const isGap = (w, t) => w.important && (w.score < t || w.names.length > 0);
+
+// adds one missing part to a topic card
+function addGap(box, w, recent) {
+  const div = document.createElement("div");
+  div.className = recent ? "gap recent" : "gap";
+  div.innerHTML = `<span class="stamp">${w.stamp}</span><span class="score">match ${w.score.toFixed(2)}</span><br>`;
+  if (w.names.length) {
+    const t = document.createElement("div");
+    t.className = "score";
+    t.textContent = "Not in notes: " + w.names.join(", ");
+    div.append(t);
+  }
+  div.append(w.text);
+  box.append(div);
+}
+
+// small grey heading inside a topic card
+function label(parent, text) {
+  const d = document.createElement("div");
+  d.className = "group-label";
+  d.textContent = text;
+  parent.append(d);
+}
+
+// redraws the topic cards on the right
+function renderGaps() {
+  const t = parseFloat($("threshold").value);
+  const isRecent = w => recording && latestStamp - toSeconds(w.stamp) < GRACE_SECONDS;
+
+  const box = $("gaps");
+  const wasAtBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  box.innerHTML = "";
+  if (!lastSegments.length) { box.innerHTML = '<p class="score">No transcript yet.</p>'; return; }
+
+  for (const seg of lastSegments) {
+    const settled = seg.windows.filter(w => !isRecent(w) && w.important);
+    const missing = settled.filter(w => isGap(w, t));
+    const covered = settled.filter(w => !isGap(w, t));
+    const recent = seg.windows.filter(w => isRecent(w) && isGap(w, t));
+    const pct = settled.length ? Math.round(100 * covered.length / settled.length) : 100;
+
+    const card = document.createElement("div");
+    card.className = "segment";
+
+    const head = document.createElement("div");
+    head.className = "seg-head";
+    const title = document.createElement("span");
+    title.textContent = `${seg.id}. ${seg.title}`;
+    const time = document.createElement("span");
+    time.className = "stamp";
+    time.textContent = `${seg.start}–${seg.end}`;
+    head.append(title, time);
+
+    const bar = document.createElement("div");
+    bar.className = "bar" + (pct < 50 ? " low" : pct < 80 ? " mid" : "");
+    bar.innerHTML = `<div style="width:${pct}%"></div>`;
+
+    const stat = document.createElement("div");
+    stat.className = "score";
+    stat.textContent = settled.length
+      ? `${pct}% covered (${covered.length}/${settled.length} parts)`
+      : "In progress";
+
+    card.append(head, bar, stat);
+
+    if (missing.length) {
+      label(card, "Missing");
+      missing.forEach(w => addGap(card, w, false));
+    }
+    if (recent.length) {
+      label(card, "Just said, not in notes yet");
+      recent.forEach(w => addGap(card, w, true));
+    }
+    if (seg.notes.length) {
+      const det = document.createElement("details");
+      det.innerHTML = `<summary>Your notes for this segment (${seg.notes.length})</summary>`;
+      det.open = openNotes.has(seg.id);  // otherwise it snaps shut on every re-render
+      det.ontoggle = () => det.open ? openNotes.add(seg.id) : openNotes.delete(seg.id);
+      const ul = document.createElement("ul");
+      ul.className = "seg-notes";
+      seg.notes.forEach(n => { const li = document.createElement("li"); li.textContent = n; ul.append(li); });
+      det.append(ul);
+      card.append(det);
+    }
+    box.append(card);
+  }
+  if (wasAtBottom) box.scrollTop = box.scrollHeight;
+}
+
+$("check").onclick = checkGaps;
+$("threshold").oninput = renderGaps;
+
+setInterval(poll, 2000);
+poll();
+</script>
+</body>
+</html>

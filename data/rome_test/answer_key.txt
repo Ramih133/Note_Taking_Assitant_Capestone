@@ -1,0 +1,14 @@
+Answer key: lines deleted from notes.txt (compare against notes_full.txt)
+
+#  Time         What's missing                                            Difficulty
+1  00:45-01:00  Polybius: Rome mixed monarchy, aristocracy, democracy     Easy (unique topic)
+2  01:45-02:00  Consul checks: 1-year term, 10-year wait to serve again   Medium (consuls still in notes)
+3  02:15-02:45  Cincinnatus as selfless model, influenced Washington      Easy (unique topic)
+4  04:15-04:30  Crossed the Rubicon with 13th legion, "the die is cast"   Medium (Pompey/Senate recall still in notes)
+5  05:45-06:00  Caesar's reforms: soldier land, debts, calendar           Hard (dictator for life + "reforms were popular" still in notes)
+6  08:15-08:45  Marius and Sulla as earlier strongmen                     Medium ("Caesar wasn't the first" still in notes)
+
+Expected false alarms (filler, nothing worth noting):
+- 01:45-02:15  Netflix CEO / Chipotle burrito jokes
+- 07:00-08:00  Open letter to the Roman Senate, harmonica bit
+- 11:30-11:45  Credits

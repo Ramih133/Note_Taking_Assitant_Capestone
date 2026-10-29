@@ -1,9 +1,8 @@
 import re
-from collections import defaultdict
-
 import pymupdf
 
-from common import BULLETS, clean, cos_sim, encode, similar
+from collections import defaultdict
+from Note_Taking_Assitant_Capestone.partner_app.common import BULLETS, clean, cos_sim, encode, similar
 
 
 def load_notes(path):
@@ -11,6 +10,7 @@ def load_notes(path):
     if low.endswith(".pdf"):
         return "\n".join(page.get_text() for page in pymupdf.open(path))
     if low.endswith(".docx"):
+        # Holy shows up if the file is docx
         import docx
         return "\n".join(p.text for p in docx.Document(path).paragraphs)
     with open(path, encoding="utf-8") as f:
@@ -29,7 +29,7 @@ def split_notes(text):
     sents = note_sentences(text)
     return sents + [sents[i] + " " + sents[i + 1] for i in range(len(sents) - 1)]
 
-
+# The cutoff that decides whether a slide point counts as covered by the notes.
 DEFAULT_THRESHOLD = 0.55
 
 
@@ -54,8 +54,9 @@ def find_missing(points, notes_text, levels=("High",), threshold=DEFAULT_THRESHO
 
 
 WEIGHTS = {"High": 3, "Medium": 2, "Low": 1}
-UNLINKED_BELOW = 0.35
-VERBATIM_ABOVE = 0.9
+
+UNLINKED_BELOW = 0.35                   # Checks if the content at all matches the lecture slides
+VERBATIM_ABOVE = 0.9                    # Checks to see if the content is matched verbatim (word for word)
 
 
 def _breakdown(points, covered, key):
@@ -113,7 +114,7 @@ def note_quality(points, notes_text, threshold=DEFAULT_THRESHOLD, skip_slides=(1
         "tips": tips,
     }
 
-
+# With llm on, Qwen write a short recap for each section the student missed.
 ORDER = {"High": 0, "Medium": 1, "Low": 2}
 LLM_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 _llm = None

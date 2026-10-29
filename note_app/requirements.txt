@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+faster-whisper
+sounddevice
+numpy
+sentence-transformers
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
