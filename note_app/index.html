@@ -35,6 +35,8 @@
 <body>
 <header>
   <button id="toggle">Start recording</button>
+  <input type="file" id="transcriptFile" accept=".txt" hidden>
+  <button id="importBtn">Import transcript</button>
   <span id="status">Idle</span>
   <span class="spacer"></span>
   <label><input type="checkbox" id="auto" checked> Live gap updates</label>
@@ -109,6 +111,7 @@ function setRecording(on, session) {
   recording = on;
   $("toggle").textContent = on ? "Stop recording" : "Start recording";
   $("status").textContent = on ? `Recording (${session})` : (session ? `Stopped (${session})` : "Idle");
+  $("importBtn").disabled = on;  // can't import while recording
 }
 
 // start / stop button
@@ -129,6 +132,30 @@ $("toggle").onclick = async () => {
   }
   $("toggle").disabled = false;
   poll();
+};
+
+// import button opens the file picker
+$("importBtn").onclick = () => $("transcriptFile").click();
+
+// sends the picked .txt to the server, then reloads the panels like a new recording
+$("transcriptFile").onchange = async () => {
+  const file = $("transcriptFile").files[0];
+  if (!file) return;
+  $("transcriptFile").value = "";  // so picking the same file again still works
+  const res = await fetch("/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: file.name, text: await file.text() }),
+  });
+  const data = await res.json();
+  if (!res.ok) { alert(data.detail); return; }
+  $("transcript").innerHTML = "";
+  lineCount = 0;
+  latestStamp = 0;
+  lastSegments = [];
+  renderGaps();
+  await poll();
+  await checkGaps();
 };
 
 // saves the notes 1.5s after the student stops typing
@@ -251,6 +278,7 @@ function renderGaps() {
 
 $("check").onclick = checkGaps;
 $("threshold").oninput = renderGaps;
+
 
 setInterval(poll, 2000);
 poll();

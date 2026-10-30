@@ -5,6 +5,9 @@ import re
 from collections import Counter
 from difflib import SequenceMatcher
 
+import string
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_VERBOSITY"] = "error"
 
@@ -24,27 +27,21 @@ NAME_PCT = 30         # names only count if said in a sentence above this centra
 model = SentenceTransformer("all-MiniLM-L6-v2")
 cache = {}  # live re-checks run every 15s, so only new text gets embedded
 
-STOP = set("""
-a about above after again all also am an and any are as at be because been before being
-below between both but by can could did do does doing down during each even few for from
-further get gets getting go goes going gonna got had has have having he her here hers him
-his how i if in into is it its itself just know let lets like make makes me more most my
-now of off ok okay on once one only or other our out over own really right same say says
-see she should so some something such take than that thats the their them then there
-these they thing things think this those through to too two under until up us use used
-using very want was way we well were what when where which while who whom why will with
-would yeah you your yours uh um oh actually basically mean means wanna kind sort
-first second next last let's that's it's we're you're i'm don't can't what's here's
-there's value values number find calculate equal equals called call whatever example
-squared cubed minus plus times over divided raised power half zero three four five
+STOP = ENGLISH_STOP_WORDS | set("""
+uh um oh ok okay yeah gonna wanna actually basically really right just like kind sort
+know think mean means say says want way thing things let lets let's make makes
+did does doing having got gets getting goes going use used using second
+it's that's thats there's here's what's i'm we're you're don't can't
+value values number calculate called equal equals example
+squared cubed minus plus times divided raised power half zero
 """.split())
 
 CAP_IGNORE = STOP | set("""
-i'll i've i'd mr mrs ms dr hey yes no thanks thank today tomorrow god bce ce ad bc am pm
+i'll i've i'd mr mrs ms dr hey yes thanks thank today tomorrow god bce ce ad bc pm
 monday tuesday wednesday thursday friday saturday sunday
 """.split())
 
-PUNCT = ".,!?;:\"()-'"
+PUNCT = string.punctuation
 
 
 def embed(texts: list[str]) -> np.ndarray:
