@@ -1,69 +1,162 @@
+
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Note Taking Assistant | Study Smart</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-  <header class="header"><div class="container nav">
-    <a class="brand" href="{{ url_for('home') }}">Note Taking Assistant</a>
-    <nav>
-      <a href="{{ url_for('home') }}">Home</a>
-      {% if username %}
-        <a href="{{ url_for('dashboard') }}">Dashboard</a>
-        <form method="post" action="{{ url_for('logout') }}"><button class="text-button" type="submit">Log out</button></form>
-      {% else %}
-        <a href="{{ url_for('login') }}">Log in</a>
-        <a class="nav-cta" href="{{ url_for('login') }}">Join for free</a>
-      {% endif %}
-    </nav>
-  </div></header>
-  <main class="container">
-    {% if page == 'home' %}
-      <section class="hero">
-        <div class="eyebrow">NOTE TAKING ASSISTANT</div>
-        <h1>Study Smart.</h1>
-        <p>Record lectures, analyze your notes, catch up on missed information live and prepare for exams.</p>
-        <a class="button" href="{{ url_for('dashboard') if username else url_for('login') }}">{{ 'Go to dashboard' if username else 'Join for free' }} →</a>
-      </section>
-      <section class="tools"><h2>Study Tools</h2>
-        {% for key, title in tools %}
-          <a class="tool" href="{{ url_for('tool_page', tool=key) }}"><strong>{{ title }}</strong><span aria-hidden="true">›</span></a>
-        {% endfor %}
-      </section>
-    {% elif page == 'login' %}
-      <section class="login-card"><h2>Join for free</h2><p>Continue to your study workspace.</p>
-        <form method="post">
-          <label for="username">Your name</label><input id="username" name="username" required placeholder="Enter your name">
-          <label for="password">Password</label><input id="password" name="password" type="password" required placeholder="Password">
-          <button class="button full" type="submit">Continue</button>
-        </form>
-      </section>
-    {% elif page == 'dashboard' %}
-      <section class="dashboard-head"><div class="eyebrow muted">DASHBOARD</div><h1 class="dashboard-title">Welcome, {{ username }}</h1><p>Continue where you left off</p></section>
-      <section class="workspace"><div class="section-title"><h2>Your workspace</h2></div>
-        <div class="panel">
-          {% if subjects %}
-            {% for subject in subjects %}<div class="subject"><strong>{{ subject }}</strong><span>Subject</span></div>{% endfor %}
-          {% else %}
-            <h3>No subjects yet</h3>
-          {% endif %}
-          <form class="subject-form" method="post" action="{{ url_for('add_subject') }}">
-            <input name="subject" maxlength="70" required placeholder="New subject name" aria-label="New subject name">
-            <button class="button" type="submit">+ Add subject</button>
-          </form>
-        </div>
-      </section>
-      <section class="tools"><h2>Study Tools</h2>
-        {% for key, title in tools %}
-          <a class="tool" href="{{ url_for('tool_page', tool=key) }}"><strong>{{ title }}</strong><span aria-hidden="true">›</span></a>
-        {% endfor %}
-      </section>
-    {% elif page == 'tool' %}
-      <section class="tool-page"><a class="back" href="{{ url_for('dashboard') }}">← Dashboard</a><h1>{{ tool_title }}</h1><div class="panel"><h3>{{ tool_title }}</h3></div></section>
-    {% endif %}
-  </main>
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Note Taking Assistant | Your Study Space</title><link rel="stylesheet" href="{{ request.url_for('static',path='style.css') }}"></head>
+<!-- Navigation -->
+<body><header class="header"><div class="container nav"><a class="brand" href="{{ request.url_for('home') }}">Note Taking Assistant</a>
+<nav><a href="{{ request.url_for('home') }}">Home</a>{% if username %}<a href="{{ request.url_for('dashboard') }}">Dashboard</a><a class="nav-courses" href="{{ request.url_for('my_courses') }}">My Courses</a><a href="{{ request.url_for('library') }}">My Materials</a><a href="{{ request.url_for('features') }}">Study Tools</a>
+<form method="post" action="{{ request.url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="text-button">Log out</button></form>
+{% else %}<a href="{{ request.url_for('login') }}">Log in</a><a class="nav-cta" href="{{ request.url_for('join') }}">Join for free</a>{% endif %}</nav></div></header>
+<main class="container">
+{% for message in get_flashed_messages() %}<div class="notice">{{ message }}</div>{% endfor %}
+<!-- Home page -->
+{% if page=='home' %}
+<section class="hero"><div class="eyebrow">NOTE TAKING ASSISTANT</div>
+<p>Organize your courses, lectures, recordings, slides, and notes in one place.</p>
+<a class="button" href="{{ request.url_for('dashboard') if username else request.url_for('join') }}">{{ 'Go to dashboard' if username else 'Join for free' }} →</a></section>
+<section class="tools"><h2>Study Tools</h2><div class="feature-grid">{% for key,title,description,status in tools %}
+<a class="tool feature-card" href="{{ request.url_for('tool_page',tool=key) }}"><span><strong>{{ title }}</strong></span><span class="feature-arrow" aria-hidden="true">→</span></a>{% endfor %}</div></section>
+<!-- Sign in and sign up pages -->
+{% elif page in ['login','signup'] %}
+<section class="login-card"><div class="eyebrow">YOUR STUDY SPACE</div><h2>{% if page == 'signup' %}Create your account{% else %}Welcome back{% endif %}</h2><p>{% if page == 'signup' %}Start organizing your courses and materials.{% else %}Sign in to access your saved courses and lectures.{% endif %}</p>
+<form method="post"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if page=='signup' %}<label>Your name</label><input name="name" required maxlength="100" placeholder="Full name">{% endif %}
+<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com">
+<label for="password">Password</label><div class="password-field"><input id="password" name="password" type="password" autocomplete="{{ 'new-password' if page=='signup' else 'current-password' }}" required {% if page=='signup' %}minlength="8"{% endif %} placeholder="Enter your password"><button type="button" class="password-toggle" onclick="togglePassword('password',this)" aria-label="Show or hide password">Show</button></div>
+{% if page=='signup' %}<p class="form-hint">At least 8 characters.</p><label for="confirm_password">Confirm password</label><div class="password-field"><input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" required placeholder="Enter your password again"><button type="button" class="password-toggle" onclick="togglePassword('confirm_password',this)">Show</button></div>{% endif %}
+<button class="button full">{{ 'Create account' if page=='signup' else 'Log in' }}</button></form>
+<p><a href="{{ request.url_for('login' if page=='signup' else 'join') }}">{{ 'Already registered? Log in' if page=='signup' else 'New here? Create an account' }}</a></p></section>
+<!-- Dashboard -->
+{% elif page=='dashboard' %}
+<section class="dashboard-head"><div class="eyebrow muted">DASHBOARD</div><h1 class="dashboard-title">Your study space<span class="dashboard-welcome">Welcome back, {{ username }}</span></h1></section>
+<div class="overview-cards"><div><strong>{{ courses|length }}</strong><span>Courses</span></div><div><strong>{{ total_lectures }}</strong><span>Lectures</span></div><div><strong>{{ total_files }}</strong><span>Saved files</span></div></div>
+<section class="workspace" id="your-courses"><div class="section-title"><h2>Your Courses</h2><a class="section-link" href="{{ request.url_for('my_courses') }}">Open My Courses →</a></div><div class="panel">
+{% if courses %}<div class="course-grid">{% for c in courses %}
+<a class="course-card" href="{{ request.url_for('course',cid=c.id) }}"><small>{{ c.code or 'COURSE' }}</small><h3>{{ c.name }}</h3><p>{{ c.lecture_count }} lecture(s) →</p></a>
+{% endfor %}</div>{% else %}<div class="empty-state"><h3>No courses yet</h3><p>Add your first course below to start saving lecture materials.</p></div>{% endif %}
+<form class="subject-form" method="post" action="{{ request.url_for('add_course') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input name="name" maxlength="100" required placeholder="Course name" aria-label="Course name">
+<input name="code" maxlength="30" placeholder="Course code (optional)" aria-label="Course code">
+<button class="button">+ Add course</button></form></div></section>
+<section class="workspace"><div class="section-title"><h2>Recently Uploaded Materials</h2><a class="section-link" href="{{ request.url_for('library') }}">View all materials →</a></div><div class="panel">
+{% if recent_files %}{% for m in recent_files %}<div class="file-row"><span><strong>{{ m.original_name }}</strong><small>{{ m.course_name }} · {{ m.lecture_title }}</small></span><span class="file-actions"><a href="{{ request.url_for('view_material',mid=m.id) }}" target="_blank" rel="noopener">View</a><a href="{{ request.url_for('download',mid=m.id) }}">Download</a></span></div>{% endfor %}
+{% else %}<p>No files uploaded yet. Open a course, add a lecture, and upload your notes, slides, or recordings.</p>{% endif %}
+</div></section>
+<section class="panel workspace-jump"><div><div class="eyebrow">STUDY WORKSPACE</div><h2>Study Tools</h2></div><a class="button" href="{{ request.url_for('features') }}">Explore features →</a></section>
+<!-- My Courses -->
+{% elif page=='my_courses' %}
+<section class="courses-page">
+  <a class="back" href="{{ request.url_for('dashboard') }}">← Dashboard</a>
+  <div class="courses-heading"><div><div class="eyebrow">MY WORKSPACE</div><h1>My Courses</h1></div><span class="course-total">{{ courses|length }} course{{ '' if courses|length == 1 else 's' }}</span></div>
+  <div class="course-library-grid">
+  {% for c in courses %}
+    <article class="course-library-card">
+      <div class="course-top"><span class="course-code">{{ c.code or 'MY COURSE' }}</span><span class="course-count">{{ c.file_count }} saved file{{ '' if c.file_count == 1 else 's' }}</span></div>
+      <h2>{{ c.name }}</h2><p>{{ c.lecture_count }} lecture{{ '' if c.lecture_count == 1 else 's' }}</p>
+      <div class="course-recent"><h3>Saved materials</h3>
+        {% for m in recent_by_course.get(c.id, []) %}
+          <div class="course-file"><span>📄 {{ m.original_name }}</span><span class="file-actions"><a href="{{ request.url_for('view_material',mid=m.id) }}" target="_blank" rel="noopener">View</a><a href="{{ request.url_for('download',mid=m.id) }}">Download</a></span></div>
+        {% else %}<p class="course-empty">No files yet.</p>{% endfor %}
+      </div>
+      <div class="course-actions"><a class="button" href="{{ request.url_for('course',cid=c.id) }}">Open course →</a><a class="outline-button" href="{{ request.url_for('library') }}?cid={{ c.id }}">All materials</a></div>
+    </article>
+  {% else %}
+    <div class="panel"><h2>No courses yet</h2><p>Create a course below. Your lectures and uploaded files will appear inside it.</p></div>
+  {% endfor %}
+  </div>
+  <section class="panel create-course"><h2>+ Add a course</h2>
+    <form class="subject-form" method="post" action="{{ request.url_for('add_course') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="name" required maxlength="100" placeholder="Course name (e.g. Biology)"><input name="code" maxlength="30" placeholder="Course code (optional)"><button class="button">Add course</button></form>
+  </section>
+</section>
+<!-- Saved materials -->
+{% elif page=='library' %}
+<section class="tool-page"><a class="back" href="{{ request.url_for('dashboard') }}">← Dashboard</a><h1>My Materials</h1>
+<div class="panel"><div class="library-filters"><a class="filter-chip {{ 'selected' if selected_course==0 else '' }}" href="{{ request.url_for('library') }}">All courses</a>{% for c in courses %}<a class="filter-chip {{ 'selected' if selected_course==c.id else '' }}" href="{{ request.url_for('library') }}?cid={{ c.id }}">{{ c.name }}</a>{% endfor %}</div>
+{% for m in files %}<div class="file-row"><span><strong>{{ m.original_name }}</strong><small><a href="{{ request.url_for('course',cid=m.course_id) }}">{{ m.course_name }}</a> · {{ m.lecture_title }} · {{ m.kind|capitalize }}</small></span><span class="file-actions"><a href="{{ request.url_for('view_material',mid=m.id) }}" target="_blank" rel="noopener">View</a><a href="{{ request.url_for('download',mid=m.id) }}">Download</a></span></div>{% else %}<div class="empty-state"><h3>No uploaded materials here yet</h3><p>Go to Your Courses, add a lecture, and upload a file to save it here.</p><a class="button" href="{{ request.url_for('my_courses') }}">Go to Your Courses</a></div>{% endfor %}</div></section>
+<!-- Course and lectures -->
+{% elif page=='course' %}
+<section class="tool-page"><a class="back" href="{{ request.url_for('my_courses') }}">← My Courses</a><h1>{{ course.name }}</h1><p>{{ course.code }}</p>
+<div class="panel"><h2>Lectures</h2>{% for lec in lectures %}
+<a class="tool" href="{{ request.url_for('lecture',lid=lec.id) }}"><strong>{{ lec.title }}</strong><span>›</span></a>
+{% else %}<p>No lectures yet.</p>{% endfor %}
+<h3>Add lecture</h3><form class="subject-form" method="post" action="{{ request.url_for('add_lecture',cid=course.id) }}">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input name="title" required maxlength="150" placeholder="Lecture title"><button class="button">+ Add lecture</button></form></div>
+<div class="panel extra"><div class="section-title"><h2>Saved Course Materials</h2><a class="section-link" href="{{ request.url_for('library') }}?cid={{ course.id }}">Open in My Materials →</a></div>
+{% for m in course_files %}<div class="file-row"><span><strong>{{ m.original_name }}</strong><small>{{ m.lecture_title }} · {{ m.kind|capitalize }}</small></span><span class="file-actions"><a href="{{ request.url_for('view_material',mid=m.id) }}" target="_blank" rel="noopener">View</a><a href="{{ request.url_for('download',mid=m.id) }}">Download</a></span></div>{% else %}<p>No files saved for this course yet.</p>{% endfor %}</div>
+<div class="panel extra" id="study-guide"><div class="section-title"><h2>Live Note</h2></div>
+<form method="post" action="{{ request.url_for('save_guide',cid=course.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><textarea class="editor" name="guide" maxlength="100000" placeholder="Write your study guide">{{ guide }}</textarea><button class="button">Save Note</button></form></div>
+<div class="panel extra"><h3>Edit course</h3><form class="subject-form" method="post" action="{{ request.url_for('edit_course',cid=course.id) }}">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input name="name" required value="{{ course.name }}"><input name="code" value="{{ course.code }}"><button class="button">Save</button></form>
+<form method="post" action="{{ request.url_for('delete_course',cid=course.id) }}" onsubmit="return confirm('Delete course and its lectures?')">
+<input type="hidden" name="csrf" value="{{ csrf }}"><button class="text-button danger">Delete course</button></form></div></section>
+<!-- Lecture workspace -->
+{% elif page=='lecture' %}
+<section class="tool-page"><a class="back" href="{{ request.url_for('course',cid=lecture.course_id) }}">← Course</a><h1>{{ lecture.title }}</h1>
+<div class="panel" id="lecture-notes"><div class="section-title"><h2>My Lecture Notes</h2><span class="save-state" id="notes-save-status" role="status" aria-live="polite">Saved with your account</span></div>
+<form id="lecture-notes-form" method="post" action="{{ request.url_for('save_notes',lid=lecture.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><textarea class="editor" name="notes" maxlength="100000" placeholder="Write your lecture notes here...">{{ saved_notes }}</textarea><button class="button">Save notes</button></form></div>
+<div class="panel extra" id="audio-recorder"><div class="section-title"><h2>Record a Lecture</h2></div><p>Record from your microphone.</p><div class="recorder-actions"><button type="button" class="outline-button" id="record-start">Start recording</button><button type="button" class="outline-button" id="record-stop" disabled>Stop</button><span id="record-status">Not recording</span></div><audio id="record-preview" controls hidden></audio><a id="record-save" class="button" hidden>Save recording</a><p class="form-hint">Download the recording, then upload it below to keep it in your account.</p></div>
+<div class="panel extra"><h2>Upload lecture materials</h2>
+<form method="post" action="{{ request.url_for('upload',lid=lecture.id) }}" enctype="multipart/form-data" class="upload-form">
+<input type="hidden" name="csrf" value="{{ csrf }}"><label>Material type</label><select name="kind"><option value="recording">Recording (MP3, WAV, M4A)</option><option value="slides">Slides (PDF)</option><option value="lecture">Lecture text (PDF, DOCX, TXT)</option><option value="notes">My notes (PDF, DOCX, TXT, JPG, PNG)</option></select>
+<label>Select a file</label><input type="file" name="file" accept=".pdf,.docx,.txt,.jpg,.png,.mp3,.wav,.m4a" required><p class="upload-help">Recordings: up to 500 MB and 3 hours. Other files: up to 25 MB. Upload each material separately.</p><button class="button">Upload file</button></form>
+<h3>Uploaded files</h3>{% for m in materials %}<div class="file-row"><span>{{ m.original_name }} — {{ {'notes':'My notes','recording':'Recording','slides':'Slides','lecture':'Lecture text'}.get(m.kind, m.kind) }}</span><span class="file-actions"><a href="{{ request.url_for('view_material',mid=m.id) }}" target="_blank" rel="noopener">View</a><a href="{{ request.url_for('download',mid=m.id) }}">Download</a></span></div>{% else %}<p>No uploads yet.</p>{% endfor %}
+</div></section>
+<!-- Study Tools -->
+{% elif page=='features' %}
+<section class="tool-page"><div class="eyebrow">STUDY SPACE</div><h1>Study Tools</h1>
+<div class="feature-grid feature-directory">{% for key,title,description,status in tools %}<a class="tool feature-card" href="{{ request.url_for('tool_page',tool=key) }}"><span><strong>{{ title }}</strong></span><span class="feature-arrow" aria-hidden="true">→</span></a>{% endfor %}</div></section>
+<!-- Study tool details -->
+{% elif page=='tool' %}
+<section class="tool-page"><a class="back" href="{{ request.url_for('features') }}">← Study Tools</a><div class="eyebrow">STUDY TOOL</div><h1>{{ tool_title }}</h1>
+<div class="panel"><h2>Choose a course</h2>
+<form method="get" action="{{ request.url_for('tool_page',tool=tool_key) }}" class="feature-course-picker"><select name="cid" aria-label="Choose course" required><option value="">Select a course</option>{% for c in courses %}<option value="{{ c.id }}" {{ 'selected' if c.id==selected_course else '' }}>{{ c.name }}{% if c.code %} ({{ c.code }}){% endif %}</option>{% endfor %}</select><button class="button">Use this course</button></form>
+{% if not courses %}<p>You haven't created a course yet. <a href="{{ request.url_for('my_courses') }}">Create one in My Courses</a>.</p>{% endif %}
+{% if selected_course %}<div class="chosen-course"><h3>Your lectures</h3><div class="lecture-links">{% for lec in lectures %}<a class="lecture-link" href="{{ request.url_for('lecture',lid=lec.id) }}"><span>📖 {{ lec.title }}</span><span>Open →</span></a>{% else %}<p>No lectures in this course yet. <a href="{{ request.url_for('course',cid=selected_course) }}">Add a lecture</a>.</p>{% endfor %}</div><a class="outline-button" href="{{ request.url_for('course',cid=selected_course) }}">Open course workspace</a></div>{% endif %}
+
+</div></section>
+{% endif %}</main><script>
+const notesForm=document.getElementById('lecture-notes-form');
+if(notesForm){
+ const editor=notesForm.querySelector('textarea[name="notes"]');
+ const state=document.getElementById('notes-save-status');
+ let timer, savedText=editor.value, pending=Promise.resolve();
+ async function saveNotes(){
+  const value=editor.value;
+  if(value===savedText)return;
+  state.textContent='Saving…';
+  const data=new FormData(notesForm);
+  try{
+   const response=await fetch(notesForm.action,{method:'POST',body:data,credentials:'same-origin',redirect:'manual'});
+   if(response.status===0 || response.status===303 || response.type==='opaqueredirect'){
+    savedText=value;
+    state.textContent='Saved with your account';
+   }else{state.textContent='Save failed — click Save notes';}
+  }catch(error){state.textContent='Save failed — click Save notes';}
+ }
+ editor.addEventListener('input',()=>{state.textContent='Unsaved changes';clearTimeout(timer);timer=setTimeout(()=>{pending=pending.then(saveNotes)},700)});
+ editor.addEventListener('blur',()=>{clearTimeout(timer);pending=pending.then(saveNotes)});
+}
+let recorder, audioChunks=[], recordedUrl;
+const startButton=document.getElementById('record-start'), stopButton=document.getElementById('record-stop');
+if(startButton && stopButton){
+ startButton.addEventListener('click',async()=>{
+  try{
+   const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+   recorder=new MediaRecorder(stream); audioChunks=[];
+   recorder.ondataavailable=e=>{if(e.data.size)audioChunks.push(e.data)};
+   recorder.onstop=()=>{
+    stream.getTracks().forEach(track=>track.stop());
+    if(recordedUrl)URL.revokeObjectURL(recordedUrl);
+    const blob=new Blob(audioChunks,{type:recorder.mimeType}); recordedUrl=URL.createObjectURL(blob);
+    const preview=document.getElementById('record-preview'),save=document.getElementById('record-save');
+    preview.src=recordedUrl;preview.hidden=false;save.href=recordedUrl;
+    save.download='lecture-recording.'+(recorder.mimeType.includes('mp4')?'m4a':'webm');save.hidden=false;
+    document.getElementById('record-status').textContent='Recording ready to save';
+   };
+   recorder.start();startButton.disabled=true;stopButton.disabled=false;
+   document.getElementById('record-status').textContent='Recording in progress…';
+  }catch(e){document.getElementById('record-status').textContent='Microphone access unavailable.'}
+ });
+ stopButton.addEventListener('click',()=>{if(recorder&&recorder.state==='recording')recorder.stop();startButton.disabled=false;stopButton.disabled=true});
+}
+function togglePassword(id,button){const input=document.getElementById(id);if(!input||!button)return;const visible=input.type==='password';input.type=visible?'text':'password';button.textContent=visible?'Hide':'Show';}</script></body></html>
