@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.mp3
+*.wav
+*.m4a
+transcript.json
+slides.json
+test_deck.pdf
+.ipynb_checkpoints/
+
+__pycache__/
+note_app/sessions/
+venv/
+*.pyc

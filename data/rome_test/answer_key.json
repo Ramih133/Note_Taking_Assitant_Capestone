@@ -1,0 +1,14 @@
+{
+  "missing": [
+    {"start": "00:45", "end": "01:00", "what": "Polybius: mixed monarchy/aristocracy/democracy"},
+    {"start": "01:45", "end": "02:00", "what": "Consul checks: 1-year term, 10-year wait"},
+    {"start": "02:15", "end": "02:45", "what": "Cincinnatus, influenced Washington"},
+    {"start": "04:15", "end": "04:30", "what": "Crossed the Rubicon with the 13th legion"},
+    {"start": "05:45", "end": "06:00", "what": "Caesar's reforms: soldier land, debts, calendar"},
+    {"start": "08:15", "end": "08:45", "what": "Marius and Sulla as earlier strongmen"}
+  ],
+  "filler": [
+    {"start": "07:00", "end": "08:00", "what": "Open letter / harmonica bit"},
+    {"start": "11:30", "end": "11:45", "what": "Sign-off and credits"}
+  ]
+}

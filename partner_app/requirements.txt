@@ -1,0 +1,9 @@
+faster-whisper
+librosa
+pymupdf
+sentence-transformers
+python-docx
+# optional, only for --llm recaps
+transformers
+accelerate
+Flask>=3.0,<4.0

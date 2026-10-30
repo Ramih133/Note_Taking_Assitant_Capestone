@@ -1,0 +1,10 @@
+{
+  "missing": [
+    {"start": "01:30", "end": "01:30", "what": "Factor x^2-4, cancel (x-2), substitute to get 4"},
+    {"start": "04:00", "end": "04:00", "what": "What a slope of 12 means"},
+    {"start": "04:30", "end": "05:00", "what": "Pick points with midpoint 2 (1&3, 1.9&2.1, ...)"}
+  ],
+  "filler": [
+    {"start": "00:00", "end": "00:00", "what": "Intro / redrawing the two"}
+  ]
+}
