@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import re
 import secrets
@@ -11,10 +13,12 @@ from starlette.datastructures import UploadFile
 from fastapi.responses import RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 from password_utils import generate_password_hash, check_password_hash
 
 from database import connect, init_db
+from analysis.common import fmt_time
 
 # Project folders and study tools
 project_folder = Path(__file__).resolve().parent
@@ -23,7 +27,7 @@ upload_folder.mkdir(exist_ok=True)
 study_tools = [
     ("record", "Lecture Recording", "Record in your browser or upload lecture audio", "available"),
     ("catchup", "Lecture Catch Up", "Review what you missed during class", "planned"),
-    ("gaps", "Missing Notes", "Compare your notes with slides and audio", "planned"),
+    ("gaps", "Missing Notes", "Compare your notes with slides and audio", "available"),
     ("guides", "Study Guides", "Write and save your own study guides", "available"),
     ("quizzes", "Practice Quizzes", "Create flashcards and test your recall", "available"),
     ("exams", "Exam Preparation", "Use saved cards and study guides to prepare", "available"),
@@ -33,10 +37,10 @@ study_tools = [
 ]
 # Allowed uploads and file limits
 allowed_file_types = {
-    "recording": {".mp3", ".wav", ".m4a"},
+    "recording": {".mp3", ".wav", ".m4a", ".webm"},
     "slides": {".pdf"},
     "lecture": {".pdf", ".txt", ".docx"},
-    "notes": {".pdf", ".txt", ".docx", ".jpg", ".png"},
+    "notes": {".pdf", ".txt", ".docx"},  # images need OCR before the analysis can read them
 }
 max_recording_size = 500 * 1024 * 1024
 max_document_size = 25 * 1024 * 1024
@@ -47,6 +51,7 @@ app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SECRET_KEY", "l
                    same_site="lax", https_only=os.environ.get("SECURE_COOKIES") == "1", max_age=8 * 3600)
 app.mount("/static", StaticFiles(directory=str(project_folder / "static")), name="static")
 templates = Jinja2Templates(directory=str(project_folder / "templates"))
+templates.env.globals["fmt_time"] = fmt_time
 init_db()
 
 # Browser  settings
@@ -392,6 +397,7 @@ async def upload(request: Request, lid: int):
         ".wav": header.startswith(b"RIFF") and header[8:12] == b"WAVE",
         ".mp3": header.startswith(b"ID3") or (len(header) >= 2 and header[0] == 255 and header[1] & 224 == 224),
         ".m4a": len(header) >= 8 and header[4:8] == b"ftyp",
+        ".webm": header.startswith(b"\x1a\x45\xdf\xa3"),
         ".txt": True,
     }.get(ext)
     if ext == ".docx":
@@ -406,8 +412,13 @@ async def upload(request: Request, lid: int):
         return redirect(request, "lecture", lid=lid)
     if kind == "recording":
         try:
-            audio = AudioFile(str(path))
-            duration = float(audio.info.length)
+            if ext == ".webm":
+                # mutagen can't read webm (what Chrome/Firefox record), so use librosa
+                import librosa
+                duration = float(librosa.get_duration(path=str(path)))
+            else:
+                audio = AudioFile(str(path))
+                duration = float(audio.info.length)
             if not 0 < duration <= max_recording_seconds:
                 raise ValueError("Recording must be 3 hours or shorter.")
         except Exception:
@@ -466,7 +477,7 @@ def view_material(request: Request, mid: int):
     if not file_path.is_file():
         raise HTTPException(404, "File not found")
     ext = Path(m["original_name"]).suffix.lower()
-    preview_types = {".pdf": "application/pdf", ".txt": "text/plain; charset=utf-8",
+    preview_types = {".webm": "audio/webm", ".pdf": "application/pdf", ".txt": "text/plain; charset=utf-8",
         ".png": "image/png", ".jpg": "image/jpeg", ".mp3": "audio/mpeg",
         ".wav": "audio/wav", ".m4a": "audio/mp4"}
     if ext not in preview_types:
@@ -563,3 +574,71 @@ async def delete_card(request: Request, cid: int, card_id: int):
     with connect() as db:
         db.execute("DELETE FROM study_cards WHERE id=? AND course_id=?", (card_id, cid))
     return redirect(request, "course", cid=cid)
+
+
+# Missing notes analysis (runs the analysis/ pipeline on a lecture's saved files)
+def run_analysis(lid: int):
+    from analysis.notes import find_missing, load_notes, note_quality, recap_missing
+    from analysis.slides import analyze_slides
+
+    with connect() as db:
+        # oldest first, so the newest upload of each kind wins
+        mats = {m["kind"]: m for m in db.execute(
+            "SELECT * FROM materials WHERE lecture_id=? ORDER BY id", (lid,)).fetchall()}
+        typed = db.execute("SELECT content FROM lecture_notes WHERE lecture_id=?", (lid,)).fetchone()
+    if "slides" not in mats:
+        return None, "Upload the lecture slides (PDF) first."
+
+    if typed and typed["content"].strip():
+        notes_text = typed["content"]
+    elif "notes" in mats and Path(mats["notes"]["stored_name"]).suffix in {".pdf", ".docx", ".txt"}:
+        notes_text = load_notes(str(upload_folder / mats["notes"]["stored_name"]))
+    else:
+        return None, "Write your notes on this page or upload them (PDF, DOCX or TXT) first."
+
+    transcript = None
+    rec = mats.get("recording")
+    lecture_text = mats.get("lecture")
+    if rec:
+        if rec["extracted_text"]:
+            transcript = json.loads(rec["extracted_text"])
+        else:
+            from analysis.transcribe import transcribe
+            transcript = transcribe(str(upload_folder / rec["stored_name"]))
+            with connect() as db:  # cache it so Whisper only runs once per recording
+                db.execute("UPDATE materials SET extracted_text=? WHERE id=?",
+                           (json.dumps(transcript), rec["id"]))
+    elif lecture_text:
+        # no recording, so use the uploaded lecture text as a transcript without timestamps.
+        # each sentence gets its index as "start" so they stay in order and don't collide
+        text = load_notes(str(upload_folder / lecture_text["stored_name"]))
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) >= 3]
+        transcript = [{"start": float(i), "end": float(i), "text": s} for i, s in enumerate(sentences)] or None
+
+    points = analyze_slides(str(upload_folder / mats["slides"]["stored_name"]), transcript, verbose=False)
+    return {
+        "missing": find_missing(points, notes_text),
+        "quality": note_quality(points, notes_text),
+        "recaps": recap_missing(points, notes_text, transcript),
+        "used_recording": rec is not None,
+        "used_lecture_text": rec is None and transcript is not None,
+    }, None
+
+@app.post("/lectures/{lid}/analyze", name="analyze")
+async def analyze(request: Request, lid: int):
+    login_check = check_login(request)
+    if login_check:
+        return login_check
+    lec = get_user_lecture(request, lid)
+    await get_form_data(request)
+    # heavy work goes to a thread so the rest of the site doesn't freeze
+    try:
+        result, error = await run_in_threadpool(run_analysis, lid)
+    except Exception:
+        # full traceback still goes to the terminal for debugging
+        logging.exception("Analysis failed for lecture %s", lid)
+        result, error = None, "Analysis failed. Check that your slides, notes and recording open correctly, then try again."
+    if error:
+        show_message(request, error)
+        return redirect(request, "lecture", lid=lid)
+    return show_page(request, "gaps_result", lecture=lec, **result)

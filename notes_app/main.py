@@ -1,9 +1,10 @@
 import argparse
 import json
 
-from Note_Taking_Assitant_Capestone.partner_app.common import fmt_time
-from Note_Taking_Assitant_Capestone.partner_app.notes import ORDER, find_missing, load_notes, note_quality, recap_missing
-from Note_Taking_Assitant_Capestone.partner_app.slides import analyze_slides
+
+from analysis.common import fmt_time
+from analysis.common import ORDER, find_missing, load_notes, note_quality, recap_missing
+from analysis.common import analyze_slides
 
 # Print functions, does no analysis
 def print_points(points, limit=None):
@@ -82,7 +83,7 @@ def main():
     args = ap.parse_args()
 
     if args.demo:
-        from Note_Taking_Assitant_Capestone.partner_app.sample_data import NOTES, TRANSCRIPT, make_test_deck
+        from analysis.common import NOTES, TRANSCRIPT, make_test_deck
         slides_path, notes_text, transcript = make_test_deck(), NOTES, TRANSCRIPT
     else:
         if not (args.slides and args.notes):
@@ -93,7 +94,7 @@ def main():
             with open(args.transcript, encoding="utf-8") as f:
                 transcript = json.load(f)
         elif args.audio:
-            from Note_Taking_Assitant_Capestone.partner_app.transcribe import transcribe
+            from analysis.common import transcribe
             transcript = transcribe(args.audio, out_path="transcript.json")
 
     # Analysis The Data

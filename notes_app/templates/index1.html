@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Note Taking Assistant | Your Study Space</title><link rel="stylesheet" href="{{ request.url_for('static',path='style.css') }}"></head>
@@ -97,10 +96,14 @@
 <div class="panel extra" id="audio-recorder"><div class="section-title"><h2>Record a Lecture</h2></div><p>Record from your microphone.</p><div class="recorder-actions"><button type="button" class="outline-button" id="record-start">Start recording</button><button type="button" class="outline-button" id="record-stop" disabled>Stop</button><span id="record-status">Not recording</span></div><audio id="record-preview" controls hidden></audio><a id="record-save" class="button" hidden>Save recording</a><p class="form-hint">Download the recording, then upload it below to keep it in your account.</p></div>
 <div class="panel extra"><h2>Upload lecture materials</h2>
 <form method="post" action="{{ request.url_for('upload',lid=lecture.id) }}" enctype="multipart/form-data" class="upload-form">
-<input type="hidden" name="csrf" value="{{ csrf }}"><label>Material type</label><select name="kind"><option value="recording">Recording (MP3, WAV, M4A)</option><option value="slides">Slides (PDF)</option><option value="lecture">Lecture text (PDF, DOCX, TXT)</option><option value="notes">My notes (PDF, DOCX, TXT, JPG, PNG)</option></select>
-<label>Select a file</label><input type="file" name="file" accept=".pdf,.docx,.txt,.jpg,.png,.mp3,.wav,.m4a" required><p class="upload-help">Recordings: up to 500 MB and 3 hours. Other files: up to 25 MB. Upload each material separately.</p><button class="button">Upload file</button></form>
+<input type="hidden" name="csrf" value="{{ csrf }}"><label>Material type</label><select name="kind"><option value="recording">Recording (MP3, WAV, M4A, WEBM)</option><option value="slides">Slides (PDF)</option><option value="lecture">Lecture transcript / text (PDF, DOCX, TXT), used if there is no recording</option><option value="notes">My notes (PDF, DOCX, TXT)</option></select>
+<label>Select a file</label><input type="file" name="file" accept=".pdf,.docx,.txt,.mp3,.wav,.m4a,.webm" required><p class="upload-help">Recordings: up to 500 MB and 3 hours. Other files: up to 25 MB. Upload each material separately.</p><button class="button">Upload file</button></form>
 <h3>Uploaded files</h3>{% for m in materials %}<div class="file-row"><span>{{ m.original_name }} — {{ {'notes':'My notes','recording':'Recording','slides':'Slides','lecture':'Lecture text'}.get(m.kind, m.kind) }}</span><span class="file-actions"><a href="{{ request.url_for('view_material',mid=m.id) }}" target="_blank" rel="noopener">View</a><a href="{{ request.url_for('download',mid=m.id) }}">Download</a></span></div>{% else %}<p>No uploads yet.</p>{% endfor %}
-</div></section>
+</div>
+<div class="panel extra" id="find-missing"><h2>Find missing notes</h2>
+<p>Compares your notes against the slides{% if materials|selectattr('kind','equalto','recording')|list %} and the recording{% elif materials|selectattr('kind','equalto','lecture')|list %} and the lecture text{% endif %}. The first run with a recording can take a few minutes.</p>
+<form method="post" action="{{ request.url_for('analyze',lid=lecture.id) }}" onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Analyzing…'">
+<input type="hidden" name="csrf" value="{{ csrf }}"><button class="button">Analyze my notes</button></form></div></section>
 <!-- Study Tools -->
 {% elif page=='features' %}
 <section class="tool-page"><div class="eyebrow">STUDY SPACE</div><h1>Study Tools</h1>
@@ -111,9 +114,28 @@
 <div class="panel"><h2>Choose a course</h2>
 <form method="get" action="{{ request.url_for('tool_page',tool=tool_key) }}" class="feature-course-picker"><select name="cid" aria-label="Choose course" required><option value="">Select a course</option>{% for c in courses %}<option value="{{ c.id }}" {{ 'selected' if c.id==selected_course else '' }}>{{ c.name }}{% if c.code %} ({{ c.code }}){% endif %}</option>{% endfor %}</select><button class="button">Use this course</button></form>
 {% if not courses %}<p>You haven't created a course yet. <a href="{{ request.url_for('my_courses') }}">Create one in My Courses</a>.</p>{% endif %}
-{% if selected_course %}<div class="chosen-course"><h3>Your lectures</h3><div class="lecture-links">{% for lec in lectures %}<a class="lecture-link" href="{{ request.url_for('lecture',lid=lec.id) }}"><span>📖 {{ lec.title }}</span><span>Open →</span></a>{% else %}<p>No lectures in this course yet. <a href="{{ request.url_for('course',cid=selected_course) }}">Add a lecture</a>.</p>{% endfor %}</div><a class="outline-button" href="{{ request.url_for('course',cid=selected_course) }}">Open course workspace</a></div>{% endif %}
+{% if selected_course %}<div class="chosen-course"><h3>Your lectures</h3><div class="lecture-links">{% if tool_key == 'gaps' %}<p class="form-hint">Pick a lecture. It needs slides and your notes, and a recording or lecture text makes the results better.</p>{% endif %}{% for lec in lectures %}<a class="lecture-link" href="{{ request.url_for('lecture',lid=lec.id) }}{{ '#find-missing' if tool_key == 'gaps' else '' }}"><span>📖 {{ lec.title }}</span><span>{{ 'Check notes →' if tool_key == 'gaps' else 'Open →' }}</span></a>{% else %}<p>No lectures in this course yet. <a href="{{ request.url_for('course',cid=selected_course) }}">Add a lecture</a>.</p>{% endfor %}</div><a class="outline-button" href="{{ request.url_for('course',cid=selected_course) }}">Open course workspace</a></div>{% endif %}
 
 </div></section>
+<!-- Missing notes results -->
+{% elif page=='gaps_result' %}
+<section class="tool-page"><a class="back" href="{{ request.url_for('lecture',lid=lecture.id) }}">← {{ lecture.title }}</a><div class="eyebrow">MISSING NOTES</div><h1>{{ lecture.title }}</h1>
+<div class="panel"><h2>Notes score: {{ quality.score }}/100</h2>
+{% if quality.coverage %}<p>{{ quality.coverage }} covered, weighted by importance{% if used_recording %} · slides + recording{% elif used_lecture_text %} · slides + lecture text{% else %} · slides only{% endif %}</p>
+{% for t in quality.tips %}<div class="notice">{{ t }}</div>{% endfor %}
+{% else %}<p>{{ quality.summary }}</p>{% endif %}</div>
+<div class="panel extra"><h2>High-importance points you missed</h2>
+{% for m in missing %}<div class="file-row"><span><strong>{{ m.text }}</strong>
+<small>Slide {{ m.slide }} · {{ m.section or m.title }} · {{ m.reasons|join(', ') }}</small>
+<small>Closest note ({{ m.similarity }}): {{ m.best_match or '—' }}</small></span></div>
+{% else %}<p>Your notes cover all the high-importance points.</p>{% endfor %}</div>
+<div class="panel extra"><h2>Section recaps</h2>
+{% for r in recaps %}<h3>{{ r.section }} <small>slides {{ r.slides }} · {{ r.coverage }} covered</small></h3>
+{% if r.summary %}<p>{{ r.summary }}</p>{% endif %}
+<ul>{% for p in r.missing %}<li>[{{ p.importance }}] {{ p.text }} (slide {{ p.slide }})</li>{% endfor %}</ul>
+{% if r.excerpts %}<p><strong>What the prof said:</strong></p><ul>{% for t, s in r.excerpts %}<li>{% if used_recording %}[{{ fmt_time(t) }}] {% endif %}{{ s }}</li>{% endfor %}</ul>{% endif %}
+{% else %}<p>No sections need a recap.</p>{% endfor %}</div>
+</section>
 {% endif %}</main><script>
 const notesForm=document.getElementById('lecture-notes-form');
 if(notesForm){
