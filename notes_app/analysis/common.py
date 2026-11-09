@@ -1,6 +1,5 @@
 from difflib import SequenceMatcher
 
-from sentence_transformers import SentenceTransformer, util
 
 
 BULLETS = "•·▪◦‣–-* "
@@ -23,6 +22,8 @@ _model = None
 def get_model():
     global _model
     if _model is None:
+        # imported here so the web app starts fast; the model only loads on first analysis
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer(MODEL_NAME)
     return _model
 
@@ -31,4 +32,5 @@ def encode(texts):
 
 
 def cos_sim(a, b):
+    from sentence_transformers import util
     return util.cos_sim(a, b)

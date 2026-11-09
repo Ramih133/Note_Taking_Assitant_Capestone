@@ -4,8 +4,7 @@ import statistics
 
 import pymupdf
 
-from Note_Taking_Assitant_Capestone.partner_app.common import clean, cos_sim, encode, similar
-
+from analysis.common import clean, cos_sim, encode, similar
 
 BOLD_FLAG = 16
 

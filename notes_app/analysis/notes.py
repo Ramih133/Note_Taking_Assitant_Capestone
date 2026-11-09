@@ -2,7 +2,7 @@ import re
 import pymupdf
 
 from collections import defaultdict
-from Note_Taking_Assitant_Capestone.partner_app.common import BULLETS, clean, cos_sim, encode, similar
+from analysis.common import BULLETS, clean, cos_sim, encode, similar
 
 
 def load_notes(path):
