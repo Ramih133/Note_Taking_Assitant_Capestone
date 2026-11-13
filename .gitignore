@@ -1,20 +1,25 @@
+# Python
 __pycache__/
 *.pyc
 venv/
 .venv/
+.ipynb_checkpoints/
+
+# local data (databases, uploads, recordings)
+*.db
+uploads/
 *.mp3
 *.wav
 *.m4a
+note_app/sessions/
 transcript.json
 slides.json
 test_deck.pdf
-.ipynb_checkpoints/
 
-__pycache__/
-note_app/sessions/
-venv/
-*.pyc
+# training: datasets and trained model (regenerate with training/ scripts)
+training/data/
+training/models/
+training/sight/
 
-data.db
-*.db
-uploads/
+# scratch
+quiz_test images/

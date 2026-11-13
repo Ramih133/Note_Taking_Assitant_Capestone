@@ -1,0 +1,37 @@
+from difflib import SequenceMatcher
+
+
+
+BULLETS = "•·▪◦‣–-* "
+
+# Cleaning of the text, removing bullet poitns ect
+def clean(text):
+    return text.lstrip(BULLETS).strip()
+
+def similar(a, b):
+    return SequenceMatcher(None, clean(a).lower(), clean(b).lower()).ratio()
+
+def fmt_time(seconds):
+    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+
+# All Mini Model is used for comparing two sentences based on meaning
+MODEL_NAME = "all-MiniLM-L6-v2"
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        # imported here so the web app starts fast; the model only loads on first analysis
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer(MODEL_NAME)
+    return _model
+
+# Turns text into vectors.
+def encode(texts):
+    return get_model().encode(texts, convert_to_tensor=True)
+
+# Scores how close the two vectors are in meaning
+def cos_sim(a, b):
+    from sentence_transformers import util
+    return util.cos_sim(a, b)
