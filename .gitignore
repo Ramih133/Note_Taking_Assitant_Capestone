@@ -1,22 +1,28 @@
-# Python
+# Python / editors
 __pycache__/
 *.pyc
 venv/
 .venv/
 .ipynb_checkpoints/
+.vscode/
+.idea/
 
-# local data (databases, uploads, recordings)
+# secrets (OPENAI_API_KEY, SECRET_KEY)
+.env
+
+# local data: databases (data.db, assistant.db), uploads, recordings
 *.db
 uploads/
+sessions/
 *.mp3
 *.wav
 *.m4a
-note_app/sessions/
+*.webm
 transcript.json
 slides.json
 test_deck.pdf
 
-# training: datasets and trained model (regenerate with training/ scripts)
+# training: datasets and the trained model (regenerate with the training/ scripts)
 training/data/
 training/models/
 training/sight/
