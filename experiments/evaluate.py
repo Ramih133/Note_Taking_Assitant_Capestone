@@ -9,8 +9,8 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "note_app"))
-import gaps  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+from analysis import gaps  # noqa: E402
 
 
 def secs(stamp: str) -> int:

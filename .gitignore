@@ -23,8 +23,6 @@ slides.json
 test_deck.pdf
 
 # training: datasets and the trained model (regenerate with the training/ scripts)
-training/data/
-training/models/
 training/sight/
 
 # scratch
