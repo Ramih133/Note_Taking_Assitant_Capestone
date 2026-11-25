@@ -353,24 +353,18 @@ async def add_lecture(request: Request, cid: int):
     return redirect(request, "course", cid=cid)
 
 # Upload lecture files
-@app.post("/lectures/{lid}/upload", name="upload")
-async def upload(request: Request, lid: int):
-    login_check = check_login(request)
-    if login_check:
-        return login_check
-    get_user_lecture(request, lid)
-    form = await get_form_data(request)
-    kind = str(form.get("kind", "lecture"))
+async def store_upload(lid: int, kind: str, file):
+    """Validate and save one uploaded file for a lecture. Returns (material_id, None) or (None, error).
+    Shared by the lecture page and the Studio notebook's Files tab."""
     if kind not in allowed_file_types:
-        raise HTTPException(400)
-    file = form.get("file")
+        return None, "Unknown file category."
     if not isinstance(file, UploadFile) or not file.filename:
-        show_message(request, "Please select a file before uploading.")
-        return redirect(request, "lecture", lid=lid)
+        return None, "Please select a file before uploading."
     ext = Path(file.filename).suffix.lower()
     if ext not in allowed_file_types[kind]:
-        show_message(request, "Unsupported file type for this material category.")
-        return redirect(request, "lecture", lid=lid)
+        if ext in {".ppt", ".pptx"}:
+            return None, "PowerPoint isn't supported yet. In PowerPoint: File > Save As > PDF, then upload the PDF."
+        return None, "Unsupported file type for this material category."
     stored = uuid.uuid4().hex + ext
     path = upload_folder / stored
     total = 0
@@ -386,8 +380,7 @@ async def upload(request: Request, lid: int):
                 output.write(chunk)
     except ValueError:
         path.unlink(missing_ok=True)
-        show_message(request, "Recording limit: 500 MB. Other files: 25 MB.")
-        return redirect(request, "lecture", lid=lid)
+        return None, "Recording limit: 500 MB. Other files: 25 MB."
 
     with path.open("rb") as source:
         header = source.read(16)
@@ -409,8 +402,7 @@ async def upload(request: Request, lid: int):
             valid = False
     if not valid or total == 0:
         path.unlink(missing_ok=True)
-        show_message(request, "Invalid or empty file. Check the selected format.")
-        return redirect(request, "lecture", lid=lid)
+        return None, "Invalid or empty file. Check the selected format."
     if kind == "recording":
         try:
             if ext == ".webm":
@@ -424,15 +416,28 @@ async def upload(request: Request, lid: int):
                 raise ValueError("Recording must be 3 hours or shorter.")
         except Exception:
             path.unlink(missing_ok=True)
-            show_message(request, "Invalid recording or longer than 3 hours.")
-            return redirect(request, "lecture", lid=lid)
+            return None, "Invalid recording or longer than 3 hours."
     with connect() as db:
-
-        db.execute(
+        mid = db.execute(
             """INSERT INTO materials (lecture_id, kind, original_name, stored_name)
                VALUES (?, ?, ?, ?)""",
             (lid, kind, Path(file.filename).name.replace("/", "_").replace("\\", "_")[:200], stored)
-        )
+        ).lastrowid
+    return mid, None
+
+@app.post("/lectures/{lid}/upload", name="upload")
+async def upload(request: Request, lid: int):
+    login_check = check_login(request)
+    if login_check:
+        return login_check
+    get_user_lecture(request, lid)
+    form = await get_form_data(request)
+    kind = str(form.get("kind", "lecture"))
+    if kind not in allowed_file_types:
+        raise HTTPException(400)
+    _, error = await store_upload(lid, kind, form.get("file"))
+    if error:
+        show_message(request, error)
     return redirect(request, "lecture", lid=lid)
 
 # Lecture page
@@ -1100,7 +1105,17 @@ async def studio_save_note(request: Request, note_id: int):
 async def studio_delete_note(request: Request, note_id: int):
     await get_form_data(request)
     with connect() as db:
+        row = db.execute('SELECT lecture_id FROM notebook_notes WHERE id=? AND user_id=?',
+                         (note_id, request.session['uid'])).fetchone()
         db.execute('DELETE FROM notebook_notes WHERE id=? AND user_id=?', (note_id, request.session['uid']))
+        shared = row and row['lecture_id'] and db.execute(
+            'SELECT 1 FROM notebook_notes WHERE lecture_id=?', (row['lecture_id'],)).fetchone()
+        if row and row['lecture_id'] and not shared:  # the note's uploads go with it (unless an organized copy still uses them)
+            files = [m['stored_name'] for m in db.execute(
+                'SELECT stored_name FROM materials WHERE lecture_id=?', (row['lecture_id'],))]
+            db.execute('DELETE FROM lectures WHERE id=?', (row['lecture_id'],))
+            for name in files:
+                (upload_folder / name).unlink(missing_ok=True)
     return redirect(request, 'studio_notes')
 
 @app.get('/studio/assistant', name='studio_assistant')
@@ -1303,6 +1318,216 @@ async def note_live_gaps(request: Request, nid: int):
     from analysis import gaps
     segments = await run_in_threadpool(gaps.analyze, lines, str(body.get("notes", ""))[:100000])
     return {"segments": segments}
+
+# ---- Studio notebook: Files tab (slides, recordings, lecture text, notes files) + Analyze ----
+# Each note gets its own row in `lectures` (notebook_notes.lecture_id), so uploads reuse the
+# materials table, store_upload(), load_transcript(), the slide analysis and Define unchanged.
+
+note_jobs = {}  # nid -> background transcription status shown in the Files tab
+
+def add_note_lecture_column():
+    from database import add_missing_columns
+    with connect() as db:  # the lecture row that holds this note's uploads
+        add_missing_columns(db, "notebook_notes", {"lecture_id": "INTEGER REFERENCES lectures(id) ON DELETE SET NULL"})
+add_note_lecture_column()
+
+def note_lecture_id(note) -> int:
+    """The lecture row behind a notebook note, created the first time it's needed."""
+    if note["lecture_id"]:
+        return note["lecture_id"]
+    with connect() as db:
+        lid = db.execute("INSERT INTO lectures(course_id,title) VALUES(?,?)",
+                         (note["course_id"], note["title"] or "Untitled note")).lastrowid
+        db.execute("UPDATE notebook_notes SET lecture_id=? WHERE id=?", (lid, note["id"]))
+    return lid
+
+def note_materials(lid: int):
+    with connect() as db:
+        return [dict(r) for r in db.execute(
+            "SELECT id, kind, original_name FROM materials WHERE lecture_id=? ORDER BY id", (lid,))]
+
+def note_plain_text(body_html: str) -> str:
+    import html as html_lib
+    text = re.sub(r"</?(p|div|li|h1|h2|h3|blockquote|br)\s*/?>", "\n", body_html or "", flags=re.I)
+    return html_lib.unescape(re.sub(r"<[^>]+>", "", text)).strip()
+
+def segments_to_lines(segments):
+    """Whisper/lecture-text segments ({start, text}) -> note transcript lines ({stamp, text})."""
+    from analysis import live
+    return [{"stamp": live._stamp(float(s.get("start", 0))), "text": s["text"].strip()}
+            for s in segments or [] if s.get("text", "").strip()]
+
+def fill_note_transcript(nid: int, lines):
+    """Use an uploaded lecture as the note's transcript, unless it already has one
+    (from recording live or importing). Then Catch Up, quizzes and terms work on it too."""
+    if not lines:
+        return False
+    with connect() as db:
+        row = db.execute("SELECT transcript FROM notebook_notes WHERE id=?", (nid,)).fetchone()
+    if row and row["transcript"] not in ("", "[]"):
+        return False
+    save_note_transcript(nid, lines)
+    hook = globals().get("start_term_refresh")  # course page terms, if that feature is installed
+    if hook:
+        hook(nid)
+    return True
+
+def transcribe_note_recording(nid: int, lid: int):
+    """Background: Whisper the uploaded recording (cached in materials), then fill the transcript."""
+    note_jobs[nid] = "Transcribing the recording. This takes a few minutes the first time…"
+    try:
+        with connect() as db:
+            mats = {m["kind"]: m for m in db.execute(
+                "SELECT * FROM materials WHERE lecture_id=? ORDER BY id", (lid,)).fetchall()}
+        transcript, _ = load_transcript(mats)
+        used = fill_note_transcript(nid, segments_to_lines(transcript))
+        note_jobs[nid] = "Recording transcribed." + ("" if used else " (Kept this note's existing transcript.)")
+    except Exception:
+        logging.exception("Transcribing recording failed for note %s", nid)
+        note_jobs[nid] = "Transcribing the recording failed. Check the terminal."
+
+def files_payload(nid: int, lid: int, **extra):
+    return {"files": note_materials(lid), "job": note_jobs.get(nid, ""), **extra}
+
+@app.get("/studio/notes/{nid}/files", name="note_files")
+def note_files(request: Request, nid: int):
+    note = note_request(request, nid, csrf=False)
+    return files_payload(nid, note_lecture_id(note))
+
+@app.post("/studio/notes/{nid}/files", name="note_upload")
+async def note_upload(request: Request, nid: int):
+    note = note_request(request, nid)
+    lid = note_lecture_id(note)
+    form = await request.form()
+    kind = str(form.get("kind", ""))
+    mid, error = await store_upload(lid, kind, form.get("file"))
+    if error:
+        return JSONResponse({"error": error, **files_payload(nid, lid)}, status_code=400)
+    extra = {}
+    from analysis.notes import load_notes
+    with connect() as db:
+        stored = db.execute("SELECT stored_name FROM materials WHERE id=?", (mid,)).fetchone()["stored_name"]
+    path = str(upload_folder / stored)
+    if kind == "notes":  # the browser adds it to the note, then autosave stores it
+        extra["notes_text"] = await run_in_threadpool(load_notes, path)
+    elif kind == "lecture":
+        from analysis import live
+        text = await run_in_threadpool(load_notes, path)
+        extra["transcript_filled"] = fill_note_transcript(nid, live.parse_transcript(text))
+    elif kind == "recording":
+        import threading
+        threading.Thread(target=transcribe_note_recording, args=(nid, lid), daemon=True).start()
+    return files_payload(nid, lid, **extra)
+
+@app.post("/studio/notes/{nid}/files/{mid}/delete", name="note_delete_file")
+def note_delete_file(request: Request, nid: int, mid: int):
+    note = note_request(request, nid)
+    lid = note_lecture_id(note)
+    with connect() as db:
+        row = db.execute("SELECT stored_name FROM materials WHERE id=? AND lecture_id=?", (mid, lid)).fetchone()
+        if not row:
+            raise HTTPException(404)
+        db.execute("DELETE FROM materials WHERE id=?", (mid,))
+    (upload_folder / row["stored_name"]).unlink(missing_ok=True)
+    return files_payload(nid, lid)
+
+def run_note_analysis(nid: int, lid: int, notes_text: str):
+    """Analyze my notes for a notebook note: its slides vs the note text, using the note's
+    transcript (live/imported/uploaded) or the uploaded recording/lecture text."""
+    from analysis import live
+    from analysis.notes import find_missing, load_notes, note_quality, recap_missing
+    from analysis.slides import analyze_slides
+    with connect() as db:
+        mats = {m["kind"]: m for m in db.execute(
+            "SELECT * FROM materials WHERE lecture_id=? ORDER BY id", (lid,)).fetchall()}
+        note = db.execute("SELECT transcript FROM notebook_notes WHERE id=?", (nid,)).fetchone()
+    if "slides" not in mats:
+        return None, "Upload the lecture slides (PDF) in the Files tab first."
+    if not notes_text.strip() and "notes" in mats:
+        notes_text = load_notes(str(upload_folder / mats["notes"]["stored_name"]))
+    if not notes_text.strip():
+        return None, "Write some notes first."
+    try:
+        lines = json.loads(note["transcript"] or "[]")
+    except ValueError:
+        lines = []
+    if lines:
+        transcript, source = live.to_segments(lines), "transcript"
+    else:
+        transcript, rec = load_transcript(mats)
+        source = "recording" if rec else ("lecture text" if transcript else "slides only")
+    points = analyze_slides(str(upload_folder / mats["slides"]["stored_name"]), transcript, verbose=False)
+    result = {
+        "missing": find_missing(points, notes_text),
+        "quality": note_quality(points, notes_text),
+        "recaps": recap_missing(points, notes_text, transcript),
+        "source": source,
+    }
+    with connect() as db:  # same as the lecture page, so quizzes can use the missed points
+        db.execute("""INSERT INTO lecture_analyses(lecture_id, missing) VALUES(?,?)
+                    ON CONFLICT(lecture_id) DO UPDATE SET missing=excluded.missing,
+                    created_at=CURRENT_TIMESTAMP""", (lid, json.dumps(result["missing"], default=str)))
+    # numpy numbers -> plain floats so it can go back as JSON
+    return json.loads(json.dumps(result, default=lambda o: float(o) if hasattr(o, "__float__") else str(o))), None
+
+@app.post("/studio/notes/{nid}/analyze", name="note_analyze")
+async def note_analyze(request: Request, nid: int):
+    note = note_request(request, nid)
+    body = await request.json()
+    notes_text = str(body.get("notes", ""))[:200000] or note_plain_text(note["body"])
+    try:
+        result, error = await run_in_threadpool(run_note_analysis, nid, note_lecture_id(note), notes_text)
+    except Exception:
+        logging.exception("Analysis failed for note %s", nid)
+        result, error = None, "Analysis failed. Check that the slides and files open correctly, then try again."
+    if error:
+        return JSONResponse({"error": error}, status_code=400)
+    return result
+
+# ---- Studio notebook: organize notes by topic ----
+
+def note_slides(lid: int):
+    """The note's newest slides PDF as [{slide, text}], one per page."""
+    with connect() as db:
+        row = db.execute("""SELECT id, stored_name, extracted_text FROM materials
+                            WHERE lecture_id=? AND kind='slides' ORDER BY id DESC LIMIT 1""", (lid,)).fetchone()
+    if not row:
+        return []
+    import pymupdf
+    with pymupdf.open(str(upload_folder / row["stored_name"])) as doc:
+        return [{"slide": i + 1, "text": page.get_text()} for i, page in enumerate(doc)]
+
+def run_organize(note, nid: int, notes_text: str):
+    from analysis.organize import run, to_html
+    lid = note_lecture_id(note)
+    sections = run(notes_text, note_lines(note, nid), note_slides(lid))
+    if not sections:
+        return None
+    with connect() as db:
+        new_id = db.execute("""INSERT INTO notebook_notes(user_id, course_id, title, body, transcript, lecture_id)
+                               VALUES (?,?,?,?,?,?)""",
+                            (note["user_id"], note["course_id"], f"{note['title']} (organized)"[:150],
+                             to_html(sections), note["transcript"], lid)).lastrowid
+    return {"note_id": new_id, "sections": len(sections), "new_topics": sum(1 for x in sections if x.get("new")),
+            "url": f"/studio/notebook?note_id={new_id}"}
+
+@app.post("/studio/notes/{nid}/organize", name="note_organize")
+async def note_organize(request: Request, nid: int):
+    """Sorts notes (this note's, or an uploaded notes file's) into topic sections and subsections
+    that follow the lecture, as a new note. The original note is left alone."""
+    note = note_request(request, nid)
+    body = await request.json()
+    notes_text = str(body.get("notes", ""))[:200000] or note_plain_text(note["body"])
+    if not notes_text.strip():
+        return JSONResponse({"error": "There are no notes to organize yet."}, status_code=400)
+    try:
+        result = await run_in_threadpool(run_organize, note, nid, notes_text)
+    except Exception:
+        logging.exception("Organize failed for note %s", nid)
+        return JSONResponse({"error": "Organizing failed. Check the terminal."}, status_code=500)
+    if not result:
+        return JSONResponse({"error": "Couldn't find any note lines to organize."}, status_code=400)
+    return result
 
 def note_define(note, nid: int, term: str, mode: str, previous: str):
     from analysis.define import define, split_sentences
