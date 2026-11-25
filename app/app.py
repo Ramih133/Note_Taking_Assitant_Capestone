@@ -39,9 +39,9 @@ study_tools = [
 # Allowed uploads and file limits
 allowed_file_types = {
     "recording": {".mp3", ".wav", ".m4a", ".webm"},
-    "slides": {".pdf"},
-    "lecture": {".pdf", ".txt", ".docx"},
-    "notes": {".pdf", ".txt", ".docx"},  # images need OCR before the analysis can read them
+    "slides": {".pdf", ".pptx"},  # .pptx is converted to a PDF when it's uploaded
+    "lecture": {".pdf", ".txt", ".docx", ".md"},
+    "notes": {".pdf", ".txt", ".docx", ".md"},  # images need OCR before the analysis can read them
 }
 max_recording_size = 500 * 1024 * 1024
 max_document_size = 25 * 1024 * 1024
@@ -362,8 +362,8 @@ async def store_upload(lid: int, kind: str, file):
         return None, "Please select a file before uploading."
     ext = Path(file.filename).suffix.lower()
     if ext not in allowed_file_types[kind]:
-        if ext in {".ppt", ".pptx"}:
-            return None, "PowerPoint isn't supported yet. In PowerPoint: File > Save As > PDF, then upload the PDF."
+        if ext == ".ppt":
+            return None, "Old .ppt files aren't supported. In PowerPoint: File > Save As > .pptx (or PDF), then upload that."
         return None, "Unsupported file type for this material category."
     stored = uuid.uuid4().hex + ext
     path = upload_folder / stored
@@ -393,11 +393,13 @@ async def store_upload(lid: int, kind: str, file):
         ".m4a": len(header) >= 8 and header[4:8] == b"ftyp",
         ".webm": header.startswith(b"\x1a\x45\xdf\xa3"),
         ".txt": True,
+        ".md": True,
     }.get(ext)
-    if ext == ".docx":
+    if ext in (".docx", ".pptx"):
+        inner = "word/document.xml" if ext == ".docx" else "ppt/presentation.xml"
         try:
             with zipfile.ZipFile(path) as archive:
-                valid = "word/document.xml" in archive.namelist()
+                valid = inner in archive.namelist()
         except (zipfile.BadZipFile, OSError):
             valid = False
     if not valid or total == 0:
@@ -417,6 +419,18 @@ async def store_upload(lid: int, kind: str, file):
         except Exception:
             path.unlink(missing_ok=True)
             return None, "Invalid recording or longer than 3 hours."
+    if ext == ".pptx":  # store a PDF version, so everything that reads slides works unchanged
+        from analysis.importer import pptx_to_pdf
+        pdf_name = uuid.uuid4().hex + ".pdf"
+        try:
+            await run_in_threadpool(pptx_to_pdf, str(path), str(upload_folder / pdf_name))
+        except Exception:
+            logging.exception("PowerPoint conversion failed for %s", file.filename)
+            (upload_folder / pdf_name).unlink(missing_ok=True)
+            return None, "Couldn't read that PowerPoint. Try File > Save As > PDF and upload the PDF."
+        finally:
+            path.unlink(missing_ok=True)
+        stored = pdf_name
     with connect() as db:
         mid = db.execute(
             """INSERT INTO materials (lecture_id, kind, original_name, stored_name)
@@ -1029,7 +1043,7 @@ def studio_notebook(request: Request, course_id: int=0, note_id: int=0):
             if note['course_id'] == course_id:
                 selected = note
                 break
-    return templates.TemplateResponse(request, 'notebook.html', dict(username=request.session.get('name', 'Student'), csrf=token(request), courses=courses, notes=notes, selected_course=course_id, selected_note=selected))
+    return templates.TemplateResponse(request, 'notebook.html', dict(username=request.session.get('name', 'Student'), csrf=token(request), courses=courses, notes=notes, selected_course=course_id, selected_note=selected, messages=request.session.pop('messages', [])))
 
 @app.get('/studio/notes', name='studio_notes')
 def studio_notes(request: Request, course_id: int=0):
@@ -1105,7 +1119,7 @@ async def studio_save_note(request: Request, note_id: int):
 async def studio_delete_note(request: Request, note_id: int):
     await get_form_data(request)
     with connect() as db:
-        row = db.execute('SELECT lecture_id FROM notebook_notes WHERE id=? AND user_id=?',
+        row = db.execute('SELECT lecture_id, course_id FROM notebook_notes WHERE id=? AND user_id=?',
                          (note_id, request.session['uid'])).fetchone()
         db.execute('DELETE FROM notebook_notes WHERE id=? AND user_id=?', (note_id, request.session['uid']))
         shared = row and row['lecture_id'] and db.execute(
@@ -1116,6 +1130,8 @@ async def studio_delete_note(request: Request, note_id: int):
             db.execute('DELETE FROM lectures WHERE id=?', (row['lecture_id'],))
             for name in files:
                 (upload_folder / name).unlink(missing_ok=True)
+    if row:  # back to that class's notes in the notebook
+        return RedirectResponse(f"/studio/notebook?course_id={row['course_id']}", status_code=303)
     return redirect(request, 'studio_notes')
 
 @app.get('/studio/assistant', name='studio_assistant')
@@ -1408,11 +1424,13 @@ async def note_upload(request: Request, nid: int):
     with connect() as db:
         stored = db.execute("SELECT stored_name FROM materials WHERE id=?", (mid,)).fetchone()["stored_name"]
     path = str(upload_folder / stored)
-    if kind == "notes":  # the browser adds it to the note, then autosave stores it
-        extra["notes_text"] = await run_in_threadpool(load_notes, path)
+    from analysis.importer import notes_to_html  # cleans PDF headers/footers, wraps and fragments
+    read_clean = lambda p: notes_to_html(p)[1] if p.lower().endswith((".pdf", ".docx")) else load_notes(p)
+    if kind == "notes":  # the browser organizes it into a new note
+        extra["notes_text"] = await run_in_threadpool(read_clean, path)
     elif kind == "lecture":
         from analysis import live
-        text = await run_in_threadpool(load_notes, path)
+        text = await run_in_threadpool(read_clean, path)
         extra["transcript_filled"] = fill_note_transcript(nid, live.parse_transcript(text))
     elif kind == "recording":
         import threading
@@ -1483,6 +1501,109 @@ async def note_analyze(request: Request, nid: int):
     if error:
         return JSONResponse({"error": error}, status_code=400)
     return result
+
+# ---- Studio notebook: import existing notes and slides as new notes ----
+
+@app.post("/studio/notes/import", name="studio_import_notes")
+async def studio_import_notes(request: Request):
+    """For new users: each notes file (docx, pdf, txt, md) becomes a note in the class, keeping
+    headings and lists. Slides (PowerPoint or PDF) are attached when one notes file is imported,
+    or become their own note when imported alone. Optionally organizes each note by topic."""
+    if (x := check_login(request)):
+        return x
+    form = await get_form_data(request)
+    try:
+        cid = int(form.get("course_id", 0))
+    except (TypeError, ValueError):
+        cid = 0
+    if not cid:
+        show_message(request, "Pick a class first.")
+        return RedirectResponse("/studio/notebook", status_code=303)
+    course = get_user_course(request, cid)
+    back = RedirectResponse(f"/studio/notebook?course_id={cid}", status_code=303)
+    notes_files = [f for f in form.getlist("notes") if isinstance(f, UploadFile) and f.filename]
+    slides = form.get("slides")
+    slides = slides if isinstance(slides, UploadFile) and slides.filename else None
+    organize_it = bool(form.get("organize"))
+    if not notes_files and not slides:
+        show_message(request, "Choose a notes file or a PowerPoint/PDF to import.")
+        return back
+    if slides and len(notes_files) > 1:
+        show_message(request, "Slides can only be attached when importing one notes file. Import them separately.")
+        return back
+
+    from analysis.importer import notes_to_html, title_from_filename
+    uid = request.session["uid"]
+    made, problems = [], []
+    for f in notes_files or [None]:
+        title = title_from_filename(f.filename if f else slides.filename)
+        with connect() as db:
+            nid = db.execute("INSERT INTO notebook_notes(user_id,course_id,title) VALUES(?,?,?)",
+                             (uid, course["id"], title)).lastrowid
+            note = db.execute("SELECT * FROM notebook_notes WHERE id=?", (nid,)).fetchone()
+        lid = note_lecture_id(note)
+        body, text = "", ""
+        if f:
+            mid, error = await store_upload(lid, "notes", f)
+            if error:
+                problems.append(f"{f.filename}: {error}")
+                with connect() as db:
+                    db.execute("DELETE FROM notebook_notes WHERE id=?", (nid,))
+                    db.execute("DELETE FROM lectures WHERE id=?", (lid,))
+                continue
+            with connect() as db:
+                stored = db.execute("SELECT stored_name FROM materials WHERE id=?", (mid,)).fetchone()["stored_name"]
+            try:
+                body, text = await run_in_threadpool(notes_to_html, str(upload_folder / stored))
+                if not text.strip():
+                    problems.append(f"{f.filename}: no text found in it. If it's a scanned PDF, it needs OCR, "
+                                    "which isn't supported yet.")
+            except Exception:
+                logging.exception("Couldn't read notes file %s", f.filename)
+                problems.append(f"{f.filename}: couldn't read the text in it.")
+        has_slides = False
+        if slides:
+            _, error = await store_upload(lid, "slides", slides)
+            if error:
+                problems.append(f"{slides.filename}: {error}")
+            else:
+                has_slides = True
+        if not f and not has_slides:  # slides-only import that failed: don't leave an empty note
+            with connect() as db:
+                db.execute("DELETE FROM notebook_notes WHERE id=?", (nid,))
+                db.execute("DELETE FROM lectures WHERE id=?", (lid,))
+            continue
+        if not f:  # slides on their own: start the note as a slide-by-slide outline
+            from analysis.importer import slides_outline
+            with connect() as db:
+                pdf = db.execute("""SELECT stored_name FROM materials WHERE lecture_id=? AND kind='slides'
+                                    ORDER BY id DESC LIMIT 1""", (lid,)).fetchone()["stored_name"]
+            try:
+                body, text = await run_in_threadpool(slides_outline, str(upload_folder / pdf))
+            except Exception:
+                logging.exception("Couldn't outline slides for note %s", nid)
+            if not text.strip():
+                problems.append(f"{slides.filename}: attached, but no text found on the slides.")
+        # without slides, a note that already has its own headings is better left as it is
+        if organize_it and f and text.strip() and (has_slides or "<h2>" not in body and "<h3>" not in body):
+            try:
+                from analysis.organize import run, to_html
+                sections = await run_in_threadpool(run, text, None, note_slides(lid))
+                body = to_html(sections) or body
+            except Exception:
+                logging.exception("Organize during import failed for note %s", nid)
+                problems.append(f"{title}: imported, but organizing by topic failed.")
+        with connect() as db:
+            db.execute("UPDATE notebook_notes SET body=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (body, nid))
+        made.append(nid)
+
+    if made:
+        show_message(request, f"Imported {len(made)} note{'s' if len(made) != 1 else ''}.")
+    for p in problems:
+        show_message(request, p)
+    if len(made) == 1:
+        return RedirectResponse(f"/studio/notebook?note_id={made[0]}", status_code=303)
+    return back
 
 # ---- Studio notebook: organize notes by topic ----
 

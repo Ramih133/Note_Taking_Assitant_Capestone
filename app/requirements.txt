@@ -17,6 +17,7 @@ librosa
 pymupdf
 sentence-transformers
 python-docx
+python-pptx
 
 # live lecture mode (mic + GPU Whisper on Windows)
 sounddevice
