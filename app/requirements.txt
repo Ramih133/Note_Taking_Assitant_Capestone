@@ -27,3 +27,6 @@ nvidia-cudnn-cu12==9.*
 # local LLM (quizzes, Define, recaps)
 transformers
 accelerate
+
+# Course AI chat page at /chat (optional: without it, Ask Your Notes uses the built-in form)
+chainlit>=2,<3

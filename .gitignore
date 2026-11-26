@@ -27,3 +27,8 @@ training/sight/
 
 # scratch
 quiz_test images/
+# Chainlit creates these on first run
+app/.chainlit/
+app/.files/
+.chainlit/
+.files/

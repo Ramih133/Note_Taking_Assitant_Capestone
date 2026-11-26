@@ -1502,6 +1502,83 @@ async def note_analyze(request: Request, nid: int):
         return JSONResponse({"error": error}, status_code=400)
     return result
 
+# ---- Course AI tools (partner): Ask Your Notes, Study Guide, Coding, Math, Flashcards, Quiz ----
+@app.get('/studio/course-ai')
+def course_ai(request: Request):
+    login = check_login(request)
+    if login:
+        return login
+    return studio(request, 'course_ai', chainlit_on=CHAINLIT_ON)
+
+# Handle requests from the new AI tools.
+@app.post('/studio/course-ai')
+async def course_ai_run(request: Request):
+    if not get_logged_in_user(request):
+        raise HTTPException(401)
+    form = await get_form_data(request)
+    tool = form.get('mode', 'chat')
+    # Coding and math do not need course notes.
+    if tool in ('coding', 'math'):
+        question = str(form.get('question', '')).strip()[:12000]
+        if not question:
+            raise HTTPException(400, 'Enter code or a math problem')
+        from analysis.rag import assist
+        try:
+            answer, mode = await run_in_threadpool(assist, tool, question)
+        except Exception:
+            logging.exception('Assistant generation failed')
+            raise HTTPException(502, 'Model request failed. Check configuration and try again.')
+        return {'answer': answer, 'mode': mode, 'sources': []}
+    if tool not in ('chat', 'guide', 'flashcards', 'quiz'):
+        raise HTTPException(400, 'Unknown tool')
+    try:
+        cid = int(form.get('course_id', '0'))
+    except ValueError:
+        raise HTTPException(400, 'Choose a class')
+    get_user_course(request, cid)
+    question = str(form.get('question','')).strip()[:2000]
+    guide = tool in ('guide', 'flashcards', 'quiz')
+    if not guide and not question:
+        raise HTTPException(400, 'Enter a question')
+    from analysis.rag import collect, retrieve, generate
+    sources = await run_in_threadpool(collect, request.session['uid'], cid)
+    if guide:
+        # Spread the sample across the course rather than taking only the first note.
+        count = min(10, len(sources))
+        selected = []
+        for i in range(count):
+            selected.append(sources[i * len(sources) // count])
+    else:
+        selected = await run_in_threadpool(retrieve, sources, question)
+    if not selected:
+        return {'answer':'No relevant saved material found. Add course notes or try different keywords.', 'sources':[], 'mode':'No evidence'}
+    try:
+        if tool in ('flashcards', 'quiz'):
+            from analysis.rag import make_practice
+            items = await run_in_threadpool(make_practice, selected, tool)
+            return {'items': items, 'answer': '', 'mode': 'AI practice', 'sources': []}
+        answer, mode = await run_in_threadpool(generate, selected, question if not guide else 'Create a study guide from these sampled course excerpts.', guide)
+    except Exception:
+        logging.exception('Course AI generation failed')
+        raise HTTPException(502, 'Model request failed. Check configuration and try again.')
+    return {'answer':answer,'mode':mode,'sources':selected}
+
+# Chainlit uses the same signed login cookie as the main app. It's optional: without it
+# (or if it fails to load), Ask Your Notes runs through the page's own form instead.
+CHAINLIT_ON = False
+try:
+    # Chainlit won't start without its own JWT secret; derive one from the app's secret if unset
+    import hashlib
+    os.environ.setdefault("CHAINLIT_AUTH_SECRET", hashlib.sha256(
+        ("chainlit:" + os.environ.get("SECRET_KEY", "local-development-only-change-me")).encode()).hexdigest())
+    from chainlit.utils import mount_chainlit
+    mount_chainlit(app=app, target=str(project_folder / "chat_ui.py"), path="/chat")
+    CHAINLIT_ON = True
+except Exception:
+    logging.warning("Chainlit not available, so Ask Your Notes uses the built-in chat form. "
+                    "pip install chainlit to enable /chat.")
+
+
 # ---- Studio notebook: import existing notes and slides as new notes ----
 
 @app.post("/studio/notes/import", name="studio_import_notes")
