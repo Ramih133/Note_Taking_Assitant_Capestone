@@ -59,8 +59,10 @@ def collect(uid, cid):
                 pass
         for n in db.execute('SELECT l.id,l.title,n.content FROM lecture_notes n JOIN lectures l ON l.id=n.lecture_id JOIN courses c ON c.id=l.course_id WHERE c.user_id=? AND c.id=?',(uid,cid)):
             add(n['title'],n['content'],f'/lectures/{n["id"]}')
-        for m in db.execute('SELECT m.* FROM materials m JOIN lectures l ON l.id=m.lecture_id JOIN courses c ON c.id=l.course_id WHERE c.user_id=? AND c.id=?',(uid,cid)):
-            add(m['original_name'],material_text(m),f'/lectures/{m["lecture_id"]}')
+        mats = db.execute('SELECT m.* FROM materials m JOIN lectures l ON l.id=m.lecture_id JOIN courses c ON c.id=l.course_id WHERE c.user_id=? AND c.id=?',(uid,cid)).fetchall()
+    # outside the read above: material_text may write its cache, and SQLite locks during an open read
+    for m in mats:
+        add(m['original_name'],material_text(m),f'/lectures/{m["lecture_id"]}')
     return sources
 
 

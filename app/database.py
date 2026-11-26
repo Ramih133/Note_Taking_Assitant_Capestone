@@ -86,3 +86,22 @@ def init_studley_tables():
         db.executescript("\n        CREATE TABLE IF NOT EXISTS notebook_notes (\n          id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, course_id INTEGER NOT NULL,\n          title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',\n          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,\n          FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE);\n        CREATE INDEX IF NOT EXISTS idx_notebook_owner_course ON notebook_notes(user_id,course_id);\n        CREATE TABLE IF NOT EXISTS study_attempts (\n          id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, course_id INTEGER NOT NULL,\n          card_id INTEGER NOT NULL, correct INTEGER NOT NULL,\n          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,\n          FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE,\n          FOREIGN KEY(card_id) REFERENCES study_cards(id) ON DELETE CASCADE);\n        ")
         # live lecture transcript saved with each notebook note (JSON list of {stamp, text})
         add_missing_columns(db, "notebook_notes", {"transcript": "TEXT NOT NULL DEFAULT ''"})
+
+# Course page: key terms + exam cues pulled from each note's transcript, linked to note lines
+def init_terms_tables():
+    with connect() as db:
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS course_terms (
+          id INTEGER PRIMARY KEY, course_id INTEGER NOT NULL, note_id INTEGER NOT NULL,
+          kind TEXT NOT NULL, term TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', stamp TEXT DEFAULT '',
+          UNIQUE(note_id, kind, term),
+          FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE,
+          FOREIGN KEY(note_id) REFERENCES notebook_notes(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS term_refs (
+          term_id INTEGER NOT NULL, note_id INTEGER NOT NULL, line_idx INTEGER NOT NULL,
+          snippet TEXT NOT NULL, score REAL NOT NULL,
+          PRIMARY KEY(term_id, note_id, line_idx),
+          FOREIGN KEY(term_id) REFERENCES course_terms(id) ON DELETE CASCADE,
+          FOREIGN KEY(note_id) REFERENCES notebook_notes(id) ON DELETE CASCADE);
+        CREATE INDEX IF NOT EXISTS idx_terms_course ON course_terms(course_id);
+        """)

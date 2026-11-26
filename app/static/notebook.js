@@ -16,3 +16,17 @@ let mediaRecorder,recordedChunks=[],micStream;const start=$('startRecording'),st
  }
  search?.addEventListener('input',update);sort?.addEventListener('change',update);
 })();
+// Course page term links open a note with ?find=<snippet>: scroll to that line and flash it
+(function () {
+  const find = new URLSearchParams(location.search).get('find');
+  const editor = document.getElementById('editor');
+  if (!find || !editor) return;
+  const want = find.trim().toLowerCase().slice(0, 60);
+  const blocks = editor.querySelectorAll('p, li, h1, h2, h3, blockquote, div');
+  const matches = [...blocks].filter(el => el.textContent.toLowerCase().includes(want));
+  const hit = matches.find(el => !matches.some(m => m !== el && el.contains(m)));  // innermost match
+  if (!hit) return;
+  hit.scrollIntoView({ block: 'center' });
+  hit.classList.add('term-flash');
+  setTimeout(() => hit.classList.remove('term-flash'), 2500);
+})();

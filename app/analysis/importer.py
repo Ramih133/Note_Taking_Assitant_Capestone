@@ -53,9 +53,21 @@ def slide_text(slide):
     return title, body, notes
 
 
+# The built-in PDF font only has Latin-1, so anything else would come out as "?"
+PLAIN = str.maketrans({"→": "->", "←": "<-", "⇒": "=>", "⇐": "<=", "↔": "<->", "≈": "~", "≤": "<=", "≥": ">=",
+                       "≠": "!=", "−": "-", "–": "-", "—": "-", "‘": "'", "’": "'", "“": '"', "”": '"',
+                       "•": "-", "…": "...", "∑": "sum", "√": "sqrt", "∞": "inf", "∈": "in"})
+
+
+def latin1(text: str) -> str:
+    text = text.translate(PLAIN)
+    return "".join(ch if ord(ch) < 256 else "?" for ch in text)
+
+
 def fit_textbox(page, rect, text, size, min_size=8, **kw):
     """insert_textbox returns < 0 when the text doesn't fit, so shrink until it does."""
     import pymupdf
+    text = latin1(text)
     while size >= min_size:
         shape = page.new_shape()
         if shape.insert_textbox(pymupdf.Rect(rect), text, fontsize=size, **kw) >= 0:

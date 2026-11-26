@@ -1015,7 +1015,8 @@ def studio_class_detail(request: Request, cid: int):
     with connect() as db:
         lectures = [dict(r) for r in db.execute('SELECT * FROM lectures WHERE course_id=? ORDER BY id DESC', (cid,))]
         files = [dict(r) for r in db.execute('SELECT m.id,m.original_name,m.kind,l.title lecture_title FROM materials m JOIN lectures l ON l.id=m.lecture_id WHERE l.course_id=? ORDER BY m.id DESC', (cid,))]
-    return studio(request, 'course_detail', course=dict(course), course_lectures=lectures, course_files=files)
+    return studio(request, 'course_detail', course=dict(course), course_lectures=lectures, course_files=files,
+                  **course_terms(cid))
 
 @app.get('/studio/notebook', name='studio_notebook')
 def studio_notebook(request: Request, course_id: int=0, note_id: int=0):
@@ -1111,6 +1112,10 @@ async def studio_save_note(request: Request, note_id: int):
         cur = db.execute('UPDATE notebook_notes SET title=?,body=?,updated_at=CURRENT_TIMESTAMP\n            WHERE id=? AND user_id=?', (title, safe_body, note_id, request.session['uid']))
         if not cur.rowcount:
             raise HTTPException(404)
+    try:  # keep the course page's term links in sync with the edited notes
+        await run_in_threadpool(relink_note, note_id)
+    except Exception:
+        logging.exception("Couldn't relink terms for note %s", note_id)
     if request.headers.get('accept', '').find('application/json') >= 0:
         return JSONResponse({'saved': True, 'note_id': note_id})
     return redirect(request, 'studio_note', note_id=note_id)
@@ -1308,6 +1313,7 @@ async def note_live_stop(request: Request, nid: int):
         lines = list(live.state["lines"])
     if lines:
         save_note_transcript(nid, lines)
+        start_term_refresh(nid)
     return {"recording": False, "saved": bool(lines), "total": len(lines)}
 
 @app.post("/studio/notes/{nid}/live/import", name="note_live_import")
@@ -1322,6 +1328,7 @@ async def note_live_import(request: Request, nid: int):
     if not lines:
         raise HTTPException(400, "No transcript text found in that file.")
     save_note_transcript(nid, lines)
+    start_term_refresh(nid)
     return {"total": len(lines)}
 
 @app.post("/studio/notes/{nid}/live/gaps", name="note_live_gaps")
@@ -1806,3 +1813,93 @@ async def note_make_cards(request: Request, nid: int):
                         c["question"], c["answer"], c["options"], c["correct"]))
             added += 1
     return {"added": added, "info": info}
+
+# ---- Course page: key terms + exam cues, linked to the notes ----
+from database import init_terms_tables
+init_terms_tables()
+
+def course_note_lines(course_id: int, only_note: int = 0):
+    """[(note_id, lines)] for every note in the class (or just one)."""
+    from analysis.terms import note_lines as html_lines
+    sql, args = "SELECT id, body FROM notebook_notes WHERE course_id=?", [course_id]
+    if only_note:
+        sql, args = sql + " AND id=?", args + [only_note]
+    with connect() as db:
+        return [(r["id"], html_lines(r["body"])) for r in db.execute(sql, args)]
+
+def save_refs(db, term_ids, refs_per_term):
+    for tid, refs in zip(term_ids, refs_per_term):
+        for r in refs:
+            db.execute("""INSERT OR REPLACE INTO term_refs(term_id, note_id, line_idx, snippet, score)
+                          VALUES (?,?,?,?,?)""", (tid, r["note_id"], r["line_idx"], r["snippet"], r["score"]))
+
+def refresh_note_terms(nid: int):
+    """Re-extract this note's terms from its transcript, then link them to every note in the class."""
+    from analysis.terms import extract, link
+    with connect() as db:
+        note = db.execute("SELECT course_id, transcript FROM notebook_notes WHERE id=?", (nid,)).fetchone()
+    if not note:
+        return 0
+    try:
+        lines = json.loads(note["transcript"] or "[]")
+    except ValueError:
+        lines = []
+    items = extract(lines)
+    refs = link(items, course_note_lines(note["course_id"]))
+    with connect() as db:
+        db.execute("DELETE FROM course_terms WHERE note_id=?", (nid,))  # refs go with it (cascade)
+        ids = [db.execute("""INSERT INTO course_terms(course_id, note_id, kind, term, detail, stamp)
+                             VALUES (?,?,?,?,?,?)""",
+                          (note["course_id"], nid, it["kind"], it["term"], it["detail"], it["stamp"])).lastrowid
+               for it in items]
+        save_refs(db, ids, refs)
+    return len(items)
+
+def relink_note(nid: int):
+    """After the notes are edited: re-check just this note against the class's terms."""
+    from analysis.terms import link
+    with connect() as db:
+        note = db.execute("SELECT course_id FROM notebook_notes WHERE id=?", (nid,)).fetchone()
+        if not note:
+            return
+        rows = [dict(r) for r in db.execute("SELECT * FROM course_terms WHERE course_id=?", (note["course_id"],))]
+    if not rows:
+        return
+    refs = link(rows, course_note_lines(note["course_id"], only_note=nid))
+    with connect() as db:
+        db.execute("DELETE FROM term_refs WHERE note_id=?", (nid,))
+        save_refs(db, [r["id"] for r in rows], refs)
+
+def course_terms(cid: int):
+    """Terms + exam cues for the course page, each with its note references."""
+    with connect() as db:
+        rows = [dict(r) for r in db.execute("""SELECT t.*, n.title AS note_title FROM course_terms t
+                    JOIN notebook_notes n ON n.id=t.note_id WHERE t.course_id=? ORDER BY t.kind, t.term""", (cid,))]
+        for r in rows:
+            r["refs"] = [dict(x) for x in db.execute("""SELECT f.*, n.title AS note_title FROM term_refs f
+                    JOIN notebook_notes n ON n.id=f.note_id WHERE f.term_id=? ORDER BY f.score DESC""", (r["id"],))]
+    return {"terms": [r for r in rows if r["kind"] == "term"], "exam": [r for r in rows if r["kind"] == "exam"]}
+
+def start_term_refresh(nid: int):
+    """Term extraction runs the LLM over the whole lecture (can take a minute), so do it in the
+    background. The course page fills in when it's done."""
+    import threading
+    def run():
+        try:
+            refresh_note_terms(nid)
+        except Exception:
+            logging.exception("Term extraction failed for note %s", nid)
+    threading.Thread(target=run, daemon=True).start()
+
+@app.post("/studio/notes/{nid}/terms", name="note_extract_terms")
+async def note_extract_terms(request: Request, nid: int):
+    note_request(request, nid)
+    count = await run_in_threadpool(refresh_note_terms, nid)
+    return {"found": count}
+
+@app.get("/studio/classes/{cid}/terms", name="course_terms_data")
+def course_terms_data(request: Request, cid: int):
+    if not get_logged_in_user(request):
+        raise HTTPException(401)
+    get_user_course(request, cid)
+    return course_terms(cid)
